@@ -3,6 +3,7 @@ package std
 import (
 	"bufio"
 	"context"
+	"go-Redis/redis/protocol"
 	"io"
 	"net"
 )
@@ -24,7 +25,7 @@ func (h *Handler) Handle(ctx context.Context, conn net.Conn) {
 			}
 			return
 		}
-		_, _ = conn.Write([]byte("+PONG\r\n"))
+		_, _ = conn.Write(protocol.NewStatusReply("PONG").ToBytes())
 	}
 }
 func (h *Handler) Close() {
