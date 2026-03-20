@@ -1,11 +1,11 @@
 package std
 
 import (
-	"bufio"
 	"context"
+	"go-Redis/redis/parser"
 	"go-Redis/redis/protocol"
-	"io"
 	"net"
+	"strings"
 )
 
 type Handler struct {
@@ -16,17 +16,22 @@ func NewHandler() *Handler {
 }
 func (h *Handler) Handle(ctx context.Context, conn net.Conn) {
 	defer conn.Close()
-	reader := bufio.NewReader(conn)
-	for {
-		_, err := reader.ReadBytes('\n')
-		if err != nil {
-			if err == io.EOF {
-				return
-			}
+	ch := parser.ParseStream(conn)
+	for paload := range ch {
+		if paload.Err != nil {
 			return
 		}
-		_, _ = conn.Write(protocol.NewStatusReply("PONG").ToBytes())
+		if len(paload.Data) == 0 {
+			continue
+		}
+		cmd := strings.ToUpper(string(paload.Data[0]))
+		if cmd == "PING" {
+			_, _ = conn.Write(protocol.NewStatusReply("PONG").ToBytes())
+			continue
+		}
+		_, _ = conn.Write(protocol.NewErrReply("ERR unknown command").ToBytes())
 	}
+
 }
 func (h *Handler) Close() {
 
