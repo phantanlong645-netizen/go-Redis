@@ -20,6 +20,24 @@ type NullBulkReply struct {
 type IntReply struct {
 	Code int64
 }
+type MultiBulkReply struct {
+	Args [][]byte
+}
+
+func (m *MultiBulkReply) ToBytes() []byte {
+	res := []byte("*" + strconv.Itoa(len(m.Args)) + "\r\n")
+	for _, arg := range m.Args {
+		res = append(res, []byte("$"+strconv.Itoa(len(arg))+"\r\n")...)
+		res = append(res, arg...)
+		res = append(res, []byte("\r\n")...)
+	}
+	return res
+}
+func NewMultiBulkReply(args [][]byte) *MultiBulkReply {
+	return &MultiBulkReply{
+		Args: args,
+	}
+}
 
 func NewErrReply(err string) *ErrReply {
 	return &ErrReply{

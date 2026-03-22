@@ -10,8 +10,11 @@ type Command struct {
 }
 
 var Router = map[string]*Command{
-	"PING": {execPing, 0},
-	"SET":  {execSet, 2},
-	"GET":  {execGet, 1},
-	"DEL":  {execDel, -1},
+	"PING":   {execPing, 0},
+	"SET":    {execSet, 2},
+	"GET":    {execGet, 1},
+	"DEL":    {execDel, -1},
+	"EXISTS": {execExists, -1},
+	"KEYS":   {execKeys, 1},
+	"TYPE":   {execType, 1},
 }
