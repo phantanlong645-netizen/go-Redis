@@ -19,4 +19,6 @@ var Router = map[string]*Command{
 	"TYPE":   {execType, 1},
 	"MGET":   {execMGET, -1},
 	"MSET":   {execMSET, -1},
+	"EXPIRE": {execExpire, 2},
+	"TTL":    {execTTL, 1},
 }
