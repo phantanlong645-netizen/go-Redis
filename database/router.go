@@ -17,4 +17,6 @@ var Router = map[string]*Command{
 	"EXISTS": {execExists, -1},
 	"KEYS":   {execKeys, 1},
 	"TYPE":   {execType, 1},
+	"MGET":   {execMGET, -1},
+	"MSET":   {execMSET, -1},
 }
