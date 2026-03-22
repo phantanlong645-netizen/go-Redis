@@ -11,9 +11,18 @@ func (db *DB) Exec(cmdLine [][]byte) protocol.Reply {
 	}
 	cmd := strings.ToUpper(string(cmdLine[0]))
 	args := cmdLine[1:]
-	f, ok := Router[cmd]
+	cmdObj, ok := Router[cmd]
 	if !ok {
 		return protocol.NewErrReply("ERR unknown command")
 	}
-	return f(db, args)
+	if cmdObj.arity >= 0 {
+		if cmdObj.arity != len(args) {
+			return protocol.NewErrReply("ERR wrong number of arguments for " + cmd)
+		}
+	} else {
+		if len(args) < -cmdObj.arity {
+			return protocol.NewErrReply("ERR wrong number of arguments for " + cmd)
+		}
+	}
+	return cmdObj.executor(db, args)
 }

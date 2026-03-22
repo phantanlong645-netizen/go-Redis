@@ -4,9 +4,14 @@ import "go-Redis/redis/protocol"
 
 type ExecFunc func(db *DB, cmdLine [][]byte) protocol.Reply
 
-var Router = map[string]ExecFunc{
-	"PING": execPing,
-	"SET":  execSet,
-	"GET":  execGet,
-	"DEL":  execDel,
+type Command struct {
+	executor ExecFunc
+	arity    int
+}
+
+var Router = map[string]*Command{
+	"PING": {execPing, 0},
+	"SET":  {execSet, 2},
+	"GET":  {execGet, 1},
+	"DEL":  {execDel, -1},
 }
