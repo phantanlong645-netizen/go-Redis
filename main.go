@@ -6,7 +6,7 @@ import (
 )
 
 func main() {
-	addr := "127.0.0.1:6399"
+	addr := "127.0.0.1:6311"
 	handler := std.NewHandler()
 	err := tcp.ListenAndServe(addr, handler)
 	if err != nil {

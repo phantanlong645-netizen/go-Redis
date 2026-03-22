@@ -8,10 +8,13 @@ import (
 )
 
 type Handler struct {
+	db *database.DB
 }
 
 func NewHandler() *Handler {
-	return &Handler{}
+	return &Handler{
+		db: database.NewDB(),
+	}
 }
 func (h *Handler) Handle(ctx context.Context, conn net.Conn) {
 	defer conn.Close()
@@ -23,7 +26,7 @@ func (h *Handler) Handle(ctx context.Context, conn net.Conn) {
 		if len(payload.Data) == 0 {
 			continue
 		}
-		reply := database.Exec(payload.Data)
+		reply := h.db.Exec(payload.Data)
 
 		_, _ = conn.Write(reply.ToBytes())
 	}

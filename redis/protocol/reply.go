@@ -1,5 +1,7 @@
 package protocol
 
+import "strconv"
+
 type Reply interface {
 	ToBytes() []byte
 }
@@ -8,6 +10,15 @@ type StatusReply struct {
 }
 type ErrReply struct {
 	Err string
+}
+type BulkReply struct {
+	Arg []byte
+}
+
+type NullBulkReply struct {
+}
+type IntReply struct {
+	Code int64
 }
 
 func NewErrReply(err string) *ErrReply {
@@ -27,4 +38,27 @@ func NewStatusReply(reply string) *StatusReply {
 
 func (r *StatusReply) ToBytes() []byte {
 	return []byte("+" + r.Status + "\r\n")
+}
+
+func NewBulkReply(arg []byte) *BulkReply {
+	return &BulkReply{
+		Arg: arg,
+	}
+}
+func NewNullBulkReply() *NullBulkReply {
+	return &NullBulkReply{}
+}
+func NewIntReply(code int64) *IntReply {
+	return &IntReply{
+		Code: code,
+	}
+}
+func (r *IntReply) ToBytes() []byte {
+	return []byte(":" + strconv.FormatInt(r.Code, 10) + "\r\n")
+}
+func (Reply *BulkReply) ToBytes() []byte {
+	return []byte("$" + strconv.Itoa(len(Reply.Arg)) + "\r\n" + string(Reply.Arg) + "\r\n")
+}
+func (Reply *NullBulkReply) ToBytes() []byte {
+	return []byte("$-1\r\n")
 }
