@@ -109,3 +109,17 @@ func execTTL(db *DB, cmdLine [][]byte) protocol.Reply {
 	}
 	return protocol.NewIntReply(ttl)
 }
+func execPersist(db *DB, cmdLine [][]byte) protocol.Reply {
+	key := string(cmdLine[0])
+	if db.IsExpired(key) {
+		return protocol.NewIntReply(0)
+	}
+	if _, ok := db.Data[key]; !ok {
+		return protocol.NewIntReply(0)
+	}
+	if _, ok := db.TTL[key]; !ok {
+		return protocol.NewIntReply(0)
+	}
+	delete(db.TTL, key)
+	return protocol.NewIntReply(1)
+}
