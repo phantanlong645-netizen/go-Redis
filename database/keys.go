@@ -13,8 +13,12 @@ func execDel(db *DB, cmdLine [][]byte) protocol.Reply {
 	var deleteCount int64
 	for _, arg := range cmdLine {
 		key := string(arg)
+		if db.IsExpired(key) {
+			continue
+		}
 		if _, ok := db.Data[key]; ok {
 			delete(db.Data, key)
+			delete(db.TTL, key)
 			deleteCount++
 		}
 	}
@@ -24,6 +28,9 @@ func execExists(db *DB, cmdLine [][]byte) protocol.Reply {
 	var count int64
 	for _, arg := range cmdLine {
 		key := string(arg)
+		if db.IsExpired(key) {
+			continue
+		}
 		if _, ok := db.Data[key]; ok {
 			count++
 		}
@@ -37,12 +44,18 @@ func execKeys(db *DB, cmdLine [][]byte) protocol.Reply {
 	}
 	result := make([][]byte, 0, len(db.Data))
 	for k, _ := range db.Data {
+		if db.IsExpired(k) {
+			continue
+		}
 		result = append(result, []byte(k))
 	}
 	return protocol.NewMultiBulkReply(result)
 }
 func execType(db *DB, cmdLine [][]byte) protocol.Reply {
 	key := string(cmdLine[0])
+	if db.IsExpired(key) {
+		return protocol.NewStatusReply("none")
+	}
 	if value, ok := db.Data[key]; ok {
 		return protocol.NewStatusReply(value.Type)
 	}

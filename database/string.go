@@ -3,7 +3,11 @@ package database
 import "go-Redis/redis/protocol"
 
 func execGet(db *DB, cmdLine [][]byte) protocol.Reply {
-	entity, ok := db.Data[string(cmdLine[0])]
+	key := string(cmdLine[0])
+	if db.IsExpired(key) {
+		return protocol.NewNullBulkReply()
+	}
+	entity, ok := db.Data[key]
 	if !ok {
 		return protocol.NewNullBulkReply()
 	}
@@ -18,12 +22,18 @@ func execSet(db *DB, cmdLine [][]byte) protocol.Reply {
 		Data: cmdLine[1],
 		Type: "string",
 	}
+	delete(db.TTL, string(cmdLine[0]))
 	return protocol.NewStatusReply("OK")
 }
 func execMGET(db *DB, cmdLine [][]byte) protocol.Reply {
 	result := make([][]byte, 0, len(cmdLine))
 	for _, v := range cmdLine {
-		entity, ok := db.Data[string(v)]
+		key := string(v)
+		if db.IsExpired(key) {
+			result = append(result, []byte(""))
+			continue
+		}
+		entity, ok := db.Data[key]
 		if !ok {
 			result = append(result, []byte(""))
 			continue
@@ -48,6 +58,7 @@ func execMSET(db *DB, cmdLine [][]byte) protocol.Reply {
 			Data: value,
 			Type: "string",
 		}
+		delete(db.TTL, string(key))
 	}
 	return protocol.NewStatusReply("OK")
 }
