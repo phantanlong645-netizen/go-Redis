@@ -26,4 +26,6 @@ var Router = map[string]*Command{
 	"HGET":    {execHget, 2},
 	"HEXISTS": {execHexists, 2},
 	"HDEL":    {execHdel, -2},
+	"LPUSH":   {execLPush, -2},
+	"LPOP":    {execLPop, 1},
 }
