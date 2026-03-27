@@ -1,6 +1,8 @@
 package database
 
-import "go-Redis/redis/protocol"
+import (
+	"go-Redis/redis/protocol"
+)
 
 func execHset(db *DB, cmdLine [][]byte) protocol.Reply {
 	key := string(cmdLine[0])
@@ -52,4 +54,57 @@ func execHget(db *DB, cmdLine [][]byte) protocol.Reply {
 		return protocol.NewNullBulkReply()
 	}
 	return protocol.NewBulkReply(value)
+}
+func execHexists(db *DB, cmdLine [][]byte) protocol.Reply {
+	key := string(cmdLine[0])
+	field := string(cmdLine[1])
+	if db.IsExpired(key) {
+		return protocol.NewIntReply(0)
+	}
+	entity, ok := db.Data[key]
+	if !ok {
+		return protocol.NewIntReply(0)
+	}
+	if entity.Type != "hash" {
+		return protocol.NewErrReply("ERR wrong type")
+	}
+	hash, ok2 := entity.Data.(map[string][]byte)
+	if !ok2 {
+		return protocol.NewIntReply(0)
+	}
+
+	if _, ok3 := hash[field]; ok3 {
+		return protocol.NewIntReply(1)
+	}
+	return protocol.NewIntReply(0)
+}
+func execHdel(db *DB, cmdLine [][]byte) protocol.Reply {
+	key := string(cmdLine[0])
+	if db.IsExpired(key) {
+		return protocol.NewIntReply(0)
+	}
+	entity, ok := db.Data[key]
+	if !ok {
+		return protocol.NewIntReply(0)
+	}
+	if entity.Type != "hash" {
+		return protocol.NewErrReply("ERR wrong type")
+	}
+	hash, ok := entity.Data.(map[string][]byte)
+	if !ok {
+		return protocol.NewErrReply("ERR wrong type")
+	}
+	var deleted int64
+	for _, arg := range cmdLine[1:] {
+		field := string(arg)
+		if _, ok2 := hash[field]; ok2 {
+			delete(hash, field)
+			deleted++
+		}
+	}
+	if len(hash) == 0 {
+		delete(db.Data, key)
+		delete(db.TTL, key)
+	}
+	return protocol.NewIntReply(deleted)
 }

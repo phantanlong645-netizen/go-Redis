@@ -24,4 +24,6 @@ var Router = map[string]*Command{
 	"PERSIST": {execPersist, 1},
 	"HSET":    {execHset, 3},
 	"HGET":    {execHget, 2},
+	"HEXISTS": {execHexists, 2},
+	"HDEL":    {execHdel, -2},
 }

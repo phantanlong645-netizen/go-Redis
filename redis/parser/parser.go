@@ -13,6 +13,7 @@ type Payload struct {
 	Err  error
 }
 
+// set name A
 func ParseStream(reader io.Reader) <-chan *Payload {
 	ch := make(chan *Payload)
 	go parse0(reader, ch)
