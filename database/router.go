@@ -28,4 +28,6 @@ var Router = map[string]*Command{
 	"HDEL":    {execHdel, -2},
 	"LPUSH":   {execLPush, -2},
 	"LPOP":    {execLPop, 1},
+	"LRANGE":  {execLRange, 3},
+	"RPUSH":   {execRPush, -2},
 }
