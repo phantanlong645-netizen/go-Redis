@@ -36,4 +36,7 @@ var Router = map[string]*Command{
 	"SADD":      {execSAdd, -2},
 	"SREM":      {execSRem, -2},
 	"SISMEMBER": {execSIsmember, 2},
+	"INCR":      {execIncr, 1},
+	"DECR":      {execDecr, 1},
+	"DBSIZE":    {execDBSize, 0},
 }

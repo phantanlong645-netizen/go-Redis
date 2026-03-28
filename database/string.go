@@ -1,6 +1,9 @@
 package database
 
-import "go-Redis/redis/protocol"
+import (
+	"go-Redis/redis/protocol"
+	"strconv"
+)
 
 func execGet(db *DB, cmdLine [][]byte) protocol.Reply {
 	key := string(cmdLine[0])
@@ -61,4 +64,73 @@ func execMSET(db *DB, cmdLine [][]byte) protocol.Reply {
 		delete(db.TTL, string(key))
 	}
 	return protocol.NewStatusReply("OK")
+}
+func execIncr(db *DB, cmdLine [][]byte) protocol.Reply {
+	key := string(cmdLine[0])
+	if db.IsExpired(key) {
+		db.Data[key] = &DataEntity{
+			Type: "string",
+			Data: []byte("1"),
+		}
+		delete(db.TTL, key)
+		return protocol.NewIntReply(1)
+	}
+	entity, ok := db.Data[key]
+	if !ok {
+		db.Data[key] = &DataEntity{
+			Type: "string",
+			Data: []byte("1"),
+		}
+		delete(db.TTL, key)
+		return protocol.NewIntReply(1)
+	}
+	if entity.Type != "string" {
+		return protocol.NewErrReply("ERR wrong type")
+	}
+	value, ok := entity.Data.([]byte)
+	if !ok {
+		return protocol.NewErrReply("ERR wrong type")
+	}
+	num, err := strconv.ParseInt(string(value), 10, 64)
+	if err != nil {
+		return protocol.NewErrReply("ERR value is not an integer")
+	}
+	num++
+	entity.Data = []byte(strconv.FormatInt(num, 10))
+	return protocol.NewIntReply(num)
+
+}
+func execDecr(db *DB, cmdLine [][]byte) protocol.Reply {
+	key := string(cmdLine[0])
+	if db.IsExpired(key) {
+		db.Data[key] = &DataEntity{
+			Type: "string",
+			Data: []byte("-1"),
+		}
+		delete(db.TTL, key)
+		return protocol.NewIntReply(-1)
+	}
+	entity, ok := db.Data[key]
+	if !ok {
+		db.Data[key] = &DataEntity{
+			Type: "string",
+			Data: []byte("-1"),
+		}
+		delete(db.TTL, key)
+		return protocol.NewIntReply(-1)
+	}
+	if entity.Type != "string" {
+		return protocol.NewErrReply("ERR wrong type")
+	}
+	value, ok := entity.Data.([]byte)
+	if !ok {
+		return protocol.NewErrReply("ERR wrong type")
+	}
+	num, err := strconv.ParseInt(string(value), 10, 64)
+	if err != nil {
+		return protocol.NewErrReply("ERR value is not an integer")
+	}
+	num--
+	entity.Data = []byte(strconv.FormatInt(num, 10))
+	return protocol.NewIntReply(num)
 }

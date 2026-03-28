@@ -123,3 +123,13 @@ func execPersist(db *DB, cmdLine [][]byte) protocol.Reply {
 	delete(db.TTL, key)
 	return protocol.NewIntReply(1)
 }
+func execDBSize(db *DB, cmdLine [][]byte) protocol.Reply {
+	var count int64
+	for key := range db.Data {
+		if db.IsExpired(key) {
+			continue
+		}
+		count++
+	}
+	return protocol.NewIntReply(count)
+}
