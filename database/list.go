@@ -103,7 +103,7 @@ func execLRange(db *DB, cmdLine [][]byte) protocol.Reply {
 	if start >= length || stop < 0 {
 		return protocol.NewMultiBulkReply([][]byte{})
 	}
-	res := make([][]byte, 0, stop-start-1)
+	res := make([][]byte, 0, stop-start+1)
 	for i := start; i <= stop; i++ {
 		res = append(res, list[i])
 	}

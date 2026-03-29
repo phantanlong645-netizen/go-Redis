@@ -2,6 +2,7 @@ package std
 
 import (
 	"context"
+	"go-Redis/aof"
 	"go-Redis/database"
 	"go-Redis/redis/parser"
 	"net"
@@ -10,13 +11,24 @@ import (
 )
 
 type Handler struct {
-	dbSet *database.DBSet
+	dbSet     *database.DBSet
+	persister *aof.Persister
 }
 
 func NewHandler() *Handler {
-	return &Handler{
-		dbSet: database.NewDBSet(),
+	dbSet := database.NewDBSet()
+	persister, err := aof.NewPersister("appendonly.aof")
+	if err != nil {
+		panic(err)
 	}
+	if err = persister.Load(dbSet); err != nil {
+		panic(err)
+	}
+	return &Handler{
+		dbSet:     dbSet,
+		persister: persister,
+	}
+
 }
 func (h *Handler) Handle(ctx context.Context, conn net.Conn) {
 	defer conn.Close()
@@ -46,16 +58,40 @@ func (h *Handler) Handle(ctx context.Context, conn net.Conn) {
 				continue
 			}
 			selectedDB = index
+			if h.persister != nil {
+				_ = h.persister.WriteCmd(payload.Data)
+			}
 			_, _ = conn.Write([]byte("+OK\r\n"))
 			continue
 		}
 
 		db := h.dbSet.GetDB(selectedDB)
 		reply := db.Exec(payload.Data)
+		if h.persister != nil && isWriteCommand(cmd) {
+			_ = h.persister.WriteCmd(payload.Data)
+		}
 		_, _ = conn.Write(reply.ToBytes())
 
 	}
 }
 func (h *Handler) Close() {
+	if h.persister != nil {
+		_ = h.persister.Close()
+	}
+}
+
+func isWriteCommand(cmd string) bool {
+	switch cmd {
+	case "SET", "MSET", "DEL",
+		"EXPIRE", "PERSIST",
+		"HSET", "HDEL",
+		"LPUSH", "RPUSH", "LPOP",
+		"SADD", "SREM",
+		"ZADD",
+		"INCR", "DECR":
+		return true
+	default:
+		return false
+	}
 
 }
