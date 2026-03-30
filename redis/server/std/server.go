@@ -22,7 +22,7 @@ func NewHandler() *Handler {
 }
 func NewHandlerWithAOF(filename string) *Handler {
 	dbSet := database.NewDBSet()
-	persister, err := aof.NewPersister(filename)
+	persister, err := aof.NewPersister(filename, aof.FsyncAlways)
 	if err != nil {
 		panic(err)
 	}

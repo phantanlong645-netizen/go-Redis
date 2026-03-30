@@ -10,13 +10,20 @@ import (
 	"sync"
 )
 
+const (
+	FsyncAlways   = "always"
+	FsyncEverySec = "everysec"
+	FsyncNo       = "no"
+)
+
 type Persister struct {
-	file       *os.File
-	mu         sync.Mutex
-	filename   string
-	currentDB  int
-	rewriting  bool
-	rewriteBuf []aofPayload
+	fsyncPolicy string
+	file        *os.File
+	mu          sync.Mutex
+	filename    string
+	currentDB   int
+	rewriting   bool
+	rewriteBuf  []aofPayload
 }
 type aofPayload struct {
 	dbIndex int
@@ -27,14 +34,15 @@ type RewriteCtx struct {
 	fileSize int64
 }
 
-func NewPersister(filename string) (*Persister, error) {
+func NewPersister(filename string, fsyncPolicy string) (*Persister, error) {
 	file, err := os.OpenFile(filename, os.O_CREATE|os.O_APPEND|os.O_RDWR, 0644)
 	if err != nil {
 		return nil, err
 	}
 	return &Persister{
-		file:     file,
-		filename: filename,
+		file:        file,
+		filename:    filename,
+		fsyncPolicy: strings.ToLower(fsyncPolicy),
 	}, nil
 
 }
@@ -57,8 +65,10 @@ func (p *Persister) SaveCmdLine(dbIndex int, cmdLine [][]byte) error {
 		if _, err := p.file.Write(data); err != nil {
 			return err
 		}
-		if err := p.file.Sync(); err != nil {
-			return err
+		if p.fsyncPolicy == FsyncAlways {
+			if err := p.file.Sync(); err != nil {
+				return err
+			}
 		}
 		p.currentDB = dbIndex
 		if p.rewriting {
@@ -83,8 +93,10 @@ func (p *Persister) SaveCmdLine(dbIndex int, cmdLine [][]byte) error {
 	if _, err := p.file.Write(data); err != nil {
 		return err
 	}
-	if err := p.file.Sync(); err != nil {
-		return err
+	if p.fsyncPolicy == FsyncAlways {
+		if err := p.file.Sync(); err != nil {
+			return err
+		}
 	}
 	if p.rewriting {
 		p.rewriteBuf = append(p.rewriteBuf, aofPayload{
@@ -224,34 +236,32 @@ func (p *Persister) DoRewrite(ctx *RewriteCtx, dbSet *database.DBSet) error {
 	}
 	return nil
 }
+
 func (p *Persister) FinishRewrite(ctx *RewriteCtx) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	tmpFile := ctx.tmpFile
 	tmpName := tmpFile.Name()
-	currentDB := -1
-	if len(p.rewriteBuf) > 0 {
-		for _, payload := range p.rewriteBuf {
-			if payload.dbIndex != currentDB {
-				selectCMD := [][]byte{
-					[]byte("SELECT"),
-					[]byte(strconv.Itoa(payload.dbIndex)),
-				}
-				if _, err := tmpFile.Write(marshalCmd(selectCMD)); err != nil {
-					_ = tmpFile.Close()
-					p.rewriting = false
-					p.rewriteBuf = nil
-					return err
-				}
-				currentDB = payload.dbIndex
-			}
-			if _, err := tmpFile.Write(marshalCmd(payload.cmdLine)); err != nil {
-				_ = tmpFile.Close()
-				p.rewriting = false
-				p.rewriteBuf = nil
-				return err
-			}
-		}
+	src, err := os.Open(p.filename)
+	if err != nil {
+		_ = tmpFile.Close()
+		p.rewriting = false
+		p.rewriteBuf = nil
+		return err
+	}
+	defer src.Close()
+
+	if _, err := src.Seek(ctx.fileSize, 0); err != nil {
+		_ = tmpFile.Close()
+		p.rewriting = false
+		p.rewriteBuf = nil
+		return err
+	}
+	if _, err := io.Copy(tmpFile, src); err != nil {
+		_ = tmpFile.Close()
+		p.rewriting = false
+		p.rewriteBuf = nil
+		return err
 	}
 	if err := tmpFile.Sync(); err != nil {
 		_ = tmpFile.Close()
@@ -265,13 +275,14 @@ func (p *Persister) FinishRewrite(ctx *RewriteCtx) error {
 		p.rewriteBuf = nil
 		return err
 	}
-
 	if err := p.file.Close(); err != nil {
 		p.rewriting = false
 		p.rewriteBuf = nil
 		return err
 	}
+
 	_ = os.Remove(p.filename)
+
 	if err := os.Rename(tmpName, p.filename); err != nil {
 		p.rewriting = false
 		p.rewriteBuf = nil
@@ -286,8 +297,8 @@ func (p *Persister) FinishRewrite(ctx *RewriteCtx) error {
 	p.file = file
 	p.rewriting = false
 	p.rewriteBuf = nil
-
 	return nil
+
 }
 
 func marshalCmd(cmdLine [][]byte) []byte {
