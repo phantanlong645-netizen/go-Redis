@@ -63,8 +63,20 @@ func (h *Handler) Handle(ctx context.Context, conn net.Conn) {
 			}
 			selectedDB = index
 			if h.persister != nil {
-				_ = h.persister.WriteCmd(payload.Data)
+				_ = h.persister.SaveCmdLine(index, payload.Data)
 			}
+			_, _ = conn.Write([]byte("+OK\r\n"))
+			continue
+		}
+		if cmd == "BGREWRITEAOF" {
+			if len(payload.Data) != 1 {
+				_, _ = conn.Write([]byte("-ERR wrong number of arguments for SELECT\r\n"))
+				continue
+			}
+			if h.persister == nil {
+				_, _ = conn.Write([]byte("-ERR AOF is not enabled\r\n"))
+			}
+			go h.persister.Rewrite(h.dbSet)
 			_, _ = conn.Write([]byte("+OK\r\n"))
 			continue
 		}
@@ -72,7 +84,7 @@ func (h *Handler) Handle(ctx context.Context, conn net.Conn) {
 		db := h.dbSet.GetDB(selectedDB)
 		reply := db.Exec(payload.Data)
 		if h.persister != nil && isWriteCommand(cmd) && !isErrorReply(reply) {
-			_ = h.persister.WriteCmd(payload.Data)
+			_ = h.persister.SaveCmdLine(selectedDB, payload.Data)
 		}
 		_, _ = conn.Write(reply.ToBytes())
 

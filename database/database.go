@@ -1,6 +1,9 @@
 package database
 
-import "time"
+import (
+	"sync"
+	"time"
+)
 
 const dbNum = 16
 
@@ -10,6 +13,7 @@ type DBSet struct {
 type DB struct {
 	Data map[string]*DataEntity
 	TTL  map[string]time.Time
+	Mu   sync.RWMutex
 }
 type DataEntity struct {
 	Type string
