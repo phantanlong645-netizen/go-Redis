@@ -5,6 +5,7 @@ import (
 	"go-Redis/aof"
 	"go-Redis/database"
 	"go-Redis/redis/parser"
+	"go-Redis/redis/protocol"
 	"net"
 	"strconv"
 	"strings"
@@ -16,8 +17,12 @@ type Handler struct {
 }
 
 func NewHandler() *Handler {
+	return NewHandlerWithAOF("appendonly.aof")
+
+}
+func NewHandlerWithAOF(filename string) *Handler {
 	dbSet := database.NewDBSet()
-	persister, err := aof.NewPersister("appendonly.aof")
+	persister, err := aof.NewPersister(filename)
 	if err != nil {
 		panic(err)
 	}
@@ -28,7 +33,6 @@ func NewHandler() *Handler {
 		dbSet:     dbSet,
 		persister: persister,
 	}
-
 }
 func (h *Handler) Handle(ctx context.Context, conn net.Conn) {
 	defer conn.Close()
@@ -67,7 +71,7 @@ func (h *Handler) Handle(ctx context.Context, conn net.Conn) {
 
 		db := h.dbSet.GetDB(selectedDB)
 		reply := db.Exec(payload.Data)
-		if h.persister != nil && isWriteCommand(cmd) {
+		if h.persister != nil && isWriteCommand(cmd) && !isErrorReply(reply) {
 			_ = h.persister.WriteCmd(payload.Data)
 		}
 		_, _ = conn.Write(reply.ToBytes())
@@ -93,5 +97,8 @@ func isWriteCommand(cmd string) bool {
 	default:
 		return false
 	}
-
+}
+func isErrorReply(reply protocol.Reply) bool {
+	_, ok := reply.(*protocol.ErrReply)
+	return ok
 }
