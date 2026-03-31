@@ -89,6 +89,22 @@ func execExpire(db *DB, cmdLine [][]byte) protocol.Reply {
 	db.TTL[key] = time.Now().Add(time.Duration(seconds) * time.Second)
 	return protocol.NewIntReply(1)
 }
+func execPExpireAt(db *DB, cmdLine [][]byte) protocol.Reply {
+	key := string(cmdLine[0])
+	if db.IsExpired(key) {
+		return protocol.NewIntReply(0)
+	}
+	if _, ok := db.Data[key]; !ok {
+		return protocol.NewIntReply(0)
+	}
+	millis, err := strconv.ParseInt(string(cmdLine[1]), 10, 64)
+	if err != nil || millis < 0 {
+		return protocol.NewErrReply("ERR invalid expire time")
+	}
+	db.TTL[key] = time.UnixMilli(millis)
+	return protocol.NewIntReply(1)
+
+}
 func execTTL(db *DB, cmdLine [][]byte) protocol.Reply {
 	key := string(cmdLine[0])
 	if db.IsExpired(key) {

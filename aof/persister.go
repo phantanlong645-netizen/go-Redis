@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 )
 
 const (
@@ -32,6 +33,10 @@ type aofPayload struct {
 type RewriteCtx struct {
 	tmpFile  *os.File
 	fileSize int64
+}
+type snapshotEntry struct {
+	entity   *database.DataEntity
+	expireAt *time.Time
 }
 
 func NewPersister(filename string, fsyncPolicy string) (*Persister, error) {
@@ -213,13 +218,14 @@ func (p *Persister) DoRewrite(ctx *RewriteCtx, dbSet *database.DBSet) error {
 			return err
 		}
 		for key, entity := range snapshot {
-			if entity == nil {
+			if entity.entity == nil {
 				continue
 			}
-			if entity.Type != "string" {
+
+			if entity.entity.Type != "string" {
 				continue
 			}
-			value, ok := entity.Data.([]byte)
+			value, ok := entity.entity.Data.([]byte)
 			if !ok {
 				continue
 			}
@@ -229,8 +235,20 @@ func (p *Persister) DoRewrite(ctx *RewriteCtx, dbSet *database.DBSet) error {
 				[]byte(key),
 				value,
 			}
+
 			if _, err := tmpFile.Write(marshalCmd(cmdLine)); err != nil {
 				return err
+			}
+			if entity.expireAt != nil {
+				ex := [][]byte{
+					[]byte("PEXPIREAT"),
+					[]byte(key),
+					[]byte(strconv.FormatInt(entity.expireAt.UnixMilli(), 10)),
+				}
+				if _, err := tmpFile.Write(marshalCmd(ex)); err != nil {
+					return err
+				}
+
 			}
 		}
 	}
@@ -311,17 +329,26 @@ func marshalCmd(cmdLine [][]byte) []byte {
 	}
 	return result
 }
-func snapshotDB(db *database.DB) map[string]*database.DataEntity {
+func snapshotDB(db *database.DB) map[string]snapshotEntry {
 	if db == nil {
 		return nil
 	}
 
-	result := make(map[string]*database.DataEntity, len(db.Data))
+	result := make(map[string]snapshotEntry, len(db.Data))
 	db.Mu.RLock()
 	defer db.Mu.RUnlock()
+	now := time.Now()
 	for key, entity := range db.Data {
 		if entity == nil {
 			continue
+		}
+		var expireAt *time.Time
+		if deadline, ok := db.TTL[key]; ok {
+			if !deadline.After(now) {
+				continue
+			}
+			expireCopy := deadline
+			expireAt = &expireCopy
 		}
 		if entity.Type == "string" {
 			value, ok := entity.Data.([]byte)
@@ -329,13 +356,19 @@ func snapshotDB(db *database.DB) map[string]*database.DataEntity {
 				continue
 			}
 			copidValue := append([]byte(nil), value...)
-			result[key] = &database.DataEntity{
-				Type: "string",
-				Data: copidValue,
+			result[key] = snapshotEntry{
+				entity: &database.DataEntity{
+					Type: "string",
+					Data: copidValue,
+				},
+				expireAt: expireAt,
 			}
 			continue
 		}
-		result[key] = entity
+		result[key] = snapshotEntry{
+			entity:   entity,
+			expireAt: expireAt,
+		}
 	}
 	return result
 }

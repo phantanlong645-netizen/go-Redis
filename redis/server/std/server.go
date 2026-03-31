@@ -84,7 +84,7 @@ func (h *Handler) Handle(ctx context.Context, conn net.Conn) {
 		db := h.dbSet.GetDB(selectedDB)
 		reply := db.Exec(payload.Data)
 		if h.persister != nil && isWriteCommand(cmd) && !isErrorReply(reply) {
-			_ = h.persister.SaveCmdLine(selectedDB, payload.Data)
+			_ = h.persister.SaveCmdLine(selectedDB, makeAofCmdLine(db, payload.Data))
 		}
 		_, _ = conn.Write(reply.ToBytes())
 
@@ -99,7 +99,7 @@ func (h *Handler) Close() {
 func isWriteCommand(cmd string) bool {
 	switch cmd {
 	case "SET", "MSET", "DEL",
-		"EXPIRE", "PERSIST",
+		"EXPIRE", "PERSIST", "PEXPIREAT",
 		"HSET", "HDEL",
 		"LPUSH", "RPUSH", "LPOP",
 		"SADD", "SREM",
@@ -113,4 +113,23 @@ func isWriteCommand(cmd string) bool {
 func isErrorReply(reply protocol.Reply) bool {
 	_, ok := reply.(*protocol.ErrReply)
 	return ok
+}
+func makeAofCmdLine(db *database.DB, cmdLine [][]byte) [][]byte {
+	if len(cmdLine) == 0 {
+		return nil
+	}
+	cmd := strings.ToUpper(string(cmdLine[0]))
+	if cmd != "EXPIRE" || len(cmdLine) != 3 || db == nil {
+		return cmdLine
+	}
+	key := string(cmdLine[1])
+	expireAt, ok := db.TTL[key]
+	if !ok {
+		return cmdLine
+	}
+	return [][]byte{
+		[]byte("PEXPIREAT"),
+		[]byte(key),
+		[]byte(strconv.FormatInt(expireAt.UnixMilli(), 10)),
+	}
 }
