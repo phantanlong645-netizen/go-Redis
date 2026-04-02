@@ -45,47 +45,8 @@ func (h *Handler) Handle(ctx context.Context, conn net.Conn) {
 		if len(payload.Data) == 0 {
 			continue
 		}
-
-		cmd := strings.ToUpper(string(payload.Data[0]))
-		if cmd == "SELECT" {
-			if len(payload.Data) != 2 {
-				_, _ = conn.Write([]byte("-ERR wrong number of arguments for SELECT\r\n"))
-				continue
-			}
-			index, err := strconv.Atoi(string(payload.Data[1]))
-			if err != nil {
-				_, _ = conn.Write([]byte("-ERR invalid DB index\r\n"))
-				continue
-			}
-			if h.dbSet.GetDB(index) == nil {
-				_, _ = conn.Write([]byte("-ERR DB index is out of range\r\n"))
-				continue
-			}
-			selectedDB = index
-			if h.persister != nil {
-				_ = h.persister.SaveCmdLine(index, payload.Data)
-			}
-			_, _ = conn.Write([]byte("+OK\r\n"))
-			continue
-		}
-		if cmd == "BGREWRITEAOF" {
-			if len(payload.Data) != 1 {
-				_, _ = conn.Write([]byte("-ERR wrong number of arguments for SELECT\r\n"))
-				continue
-			}
-			if h.persister == nil {
-				_, _ = conn.Write([]byte("-ERR AOF is not enabled\r\n"))
-			}
-			go h.persister.Rewrite(h.dbSet)
-			_, _ = conn.Write([]byte("+OK\r\n"))
-			continue
-		}
-
-		db := h.dbSet.GetDB(selectedDB)
-		reply := db.Exec(payload.Data)
-		if h.persister != nil && isWriteCommand(cmd) && !isErrorReply(reply) {
-			_ = h.persister.SaveCmdLine(selectedDB, makeAofCmdLine(db, payload.Data))
-		}
+		reply, newDB := h.Exec(selectedDB, payload.Data)
+		selectedDB = newDB
 		_, _ = conn.Write(reply.ToBytes())
 
 	}
@@ -132,4 +93,76 @@ func makeAofCmdLine(db *database.DB, cmdLine [][]byte) [][]byte {
 		[]byte(key),
 		[]byte(strconv.FormatInt(expireAt.UnixMilli(), 10)),
 	}
+}
+func (h *Handler) Exec(selectedDB int, cmdLine [][]byte) (protocol.Reply, int) {
+	if len(cmdLine) == 0 {
+		return protocol.NewErrReply("ERR empty command"), selectedDB
+	}
+	cmd := strings.ToUpper(string(cmdLine[0]))
+
+	switch cmd {
+	case "SELECT":
+		return h.execSelect(selectedDB, cmdLine)
+	case "BGREWRITEAOF":
+		return h.execBGRewriteAOF(cmdLine), selectedDB
+	case "SAVE":
+		return h.execSaveRDB(cmdLine), selectedDB
+
+	}
+	db := h.dbSet.GetDB(selectedDB)
+	if db == nil {
+		return protocol.NewErrReply("ERR DB index is out of range"), selectedDB
+	}
+	reply := db.Exec(cmdLine)
+	if h.persister != nil && isWriteCommand(cmd) && !isErrorReply(reply) {
+		_ = h.persister.SaveCmdLine(selectedDB, makeAofCmdLine(db, cmdLine))
+	}
+	return reply, selectedDB
+}
+func (h *Handler) execSelect(selectedDB int, cmdLine [][]byte) (protocol.Reply, int) {
+
+	if len(cmdLine) != 2 {
+		return protocol.NewErrReply("ERR wrong number of arguments for SELECT"), selectedDB
+	}
+	index, err := strconv.Atoi(string(cmdLine[1]))
+	if err != nil {
+		return protocol.NewErrReply("ERR invalid DB index"), selectedDB
+	}
+	if h.dbSet.GetDB(index) == nil {
+		return protocol.NewErrReply("ERR DB index is out of range"), selectedDB
+
+	}
+	selectedDB = index
+	if h.persister != nil {
+		_ = h.persister.SaveCmdLine(index, cmdLine)
+	}
+	return protocol.NewStatusReply("OK"), selectedDB
+}
+func (h *Handler) execBGRewriteAOF(cmdLine [][]byte) protocol.Reply {
+	if len(cmdLine) != 1 {
+		return protocol.NewErrReply("ERR wrong number of arguments for BGREWRITEAOF")
+
+	}
+	if h.persister == nil {
+		return protocol.NewErrReply("ERR AOF is not enabled")
+
+	}
+	go h.persister.Rewrite(h.dbSet)
+	return protocol.NewStatusReply("OK")
+
+}
+func (h *Handler) execSaveRDB(cmdLine [][]byte) protocol.Reply {
+	if len(cmdLine) != 1 {
+		return protocol.NewErrReply("ERR wrong number of arguments for SAVE")
+	}
+	if h.persister == nil {
+		return protocol.NewErrReply("ERR AOF is not enabled")
+
+	}
+	if err := h.persister.GenerateRDB("dump.rdb"); err != nil {
+		return protocol.NewErrReply("ERR save rdb failed")
+
+	}
+	return protocol.NewStatusReply("OK")
+
 }
