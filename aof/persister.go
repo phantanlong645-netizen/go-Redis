@@ -29,6 +29,7 @@ type Persister struct {
 	cancel      context.CancelFunc
 	aofChan     chan *payload
 	aofFinished chan struct{}
+	dbSet       *database.DBSet
 }
 
 type RewriteCtx struct {
@@ -44,7 +45,7 @@ type payload struct {
 	dbIndex int
 }
 
-func NewPersister(filename string, fsyncPolicy string) (*Persister, error) {
+func NewPersister(dbSet *database.DBSet, filename string, fsyncPolicy string) (*Persister, error) {
 	file, err := os.OpenFile(filename, os.O_CREATE|os.O_APPEND|os.O_RDWR, 0644)
 	if err != nil {
 		return nil, err
@@ -59,6 +60,7 @@ func NewPersister(filename string, fsyncPolicy string) (*Persister, error) {
 		cancel:      cancel,
 		aofChan:     make(chan *payload, 1<<20),
 		aofFinished: make(chan struct{}),
+		dbSet:       dbSet,
 	}
 	go p.listenCmd()
 	if p.fsyncPolicy == FsyncEverySec {
