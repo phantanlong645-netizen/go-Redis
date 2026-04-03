@@ -4,7 +4,9 @@ import (
 	"go-Redis/database"
 	"os"
 
+	rdbcore "github.com/hdt3213/rdb/core"
 	"github.com/hdt3213/rdb/encoder"
+	rdbmodel "github.com/hdt3213/rdb/model"
 )
 
 func (p *Persister) GenerateRDB(rdbFilename string) error {
@@ -121,4 +123,34 @@ func (p *Persister) generateRDB(ctx *RewriteCtx, dbSet *database.DBSet) error {
 		return err
 	}
 	return nil
+}
+func LoadRDBFile(dbSet *database.DBSet, filename string) error {
+	file, err := os.Open(filename)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	decoder := rdbcore.NewDecoder(file)
+	return LoadRDB(dbSet, decoder)
+}
+func LoadRDB(dbSet *database.DBSet, dec *rdbcore.Decoder) error {
+	return dec.Parse(func(obj rdbmodel.RedisObject) bool {
+		strobj, ok := obj.(*rdbmodel.StringObject)
+		if !ok {
+			return true
+		}
+		db := dbSet.GetDB(strobj.GetDBIndex())
+		if db == nil {
+			return false
+		}
+		db.Data[strobj.GetKey()] = &database.DataEntity{
+			Type: "string",
+			Data: append([]byte(nil), strobj.Value...),
+		}
+		if expireAt := strobj.GetExpiration(); expireAt != nil {
+			db.TTL[strobj.GetKey()] = *expireAt
+		}
+		return true
+
+	})
 }

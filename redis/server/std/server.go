@@ -7,6 +7,7 @@ import (
 	"go-Redis/redis/parser"
 	"go-Redis/redis/protocol"
 	"net"
+	"os"
 	"strconv"
 	"strings"
 )
@@ -22,12 +23,27 @@ func NewHandler() *Handler {
 }
 func NewHandlerWithAOF(filename string) *Handler {
 	dbSet := database.NewDBSet()
+	_, statErr := os.Stat(filename)
+	aofExists := statErr == nil
+	if statErr != nil && !os.IsNotExist(statErr) {
+		panic(statErr)
+	}
 	persister, err := aof.NewPersister(dbSet, filename, aof.FsyncAlways)
 	if err != nil {
 		panic(err)
 	}
-	if err = persister.Load(dbSet); err != nil {
-		panic(err)
+	if aofExists {
+		if err = persister.Load(dbSet); err != nil {
+			panic(err)
+		}
+	} else {
+		if _, err := os.Stat("dump.rdb"); err == nil {
+			if err := aof.LoadRDBFile(dbSet, "dump.rdb"); err != nil {
+				panic(err)
+			}
+		} else if !os.IsNotExist(err) {
+			panic(err)
+		}
 	}
 	return &Handler{
 		dbSet:     dbSet,
@@ -107,7 +123,8 @@ func (h *Handler) Exec(selectedDB int, cmdLine [][]byte) (protocol.Reply, int) {
 		return h.execBGRewriteAOF(cmdLine), selectedDB
 	case "SAVE":
 		return h.execSaveRDB(cmdLine), selectedDB
-
+	case "BGSAVE":
+		return h.execBGSaveRDB(cmdLine), selectedDB
 	}
 	db := h.dbSet.GetDB(selectedDB)
 	if db == nil {
@@ -164,5 +181,18 @@ func (h *Handler) execSaveRDB(cmdLine [][]byte) protocol.Reply {
 
 	}
 	return protocol.NewStatusReply("OK")
+
+}
+func (h *Handler) execBGSaveRDB(cmdLine [][]byte) protocol.Reply {
+	if len(cmdLine) != 1 {
+		return protocol.NewErrReply("ERR wrong number of arguments for BGSAVE")
+	}
+	if h.persister == nil {
+		return protocol.NewErrReply("ERR AOF is not enabled")
+	}
+	go func() {
+		_ = h.persister.GenerateRDB("dump.rdb")
+	}()
+	return protocol.NewStatusReply("Background saving started")
 
 }
