@@ -8,14 +8,14 @@ import (
 type Connection struct {
 	conn       net.Conn
 	selectedDB int
-	subs       map[string]bool
+	subs       map[string]struct{}
 	mu         sync.Mutex
 }
 
 func NewConn(conn net.Conn) *Connection {
 	return &Connection{
 		conn: conn,
-		subs: make(map[string]bool),
+		subs: make(map[string]struct{}),
 	}
 }
 func (c *Connection) Write(b []byte) (int, error) {
@@ -30,7 +30,7 @@ func (c *Connection) Close() error {
 func (c *Connection) Subscribe(channel string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.subs[channel] = true
+	c.subs[channel] = struct{}{}
 }
 func (c *Connection) UnSubscribe(channel string) {
 	c.mu.Lock()
