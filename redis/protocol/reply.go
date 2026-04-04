@@ -14,6 +14,8 @@ type ErrReply struct {
 type BulkReply struct {
 	Arg []byte
 }
+type NoReply struct {
+}
 
 type NullBulkReply struct {
 }
@@ -79,4 +81,8 @@ func (Reply *BulkReply) ToBytes() []byte {
 }
 func (Reply *NullBulkReply) ToBytes() []byte {
 	return []byte("$-1\r\n")
+}
+
+func (Reply *NoReply) ToBytes() []byte {
+	return nil
 }
