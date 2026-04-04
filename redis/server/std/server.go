@@ -4,6 +4,8 @@ import (
 	"context"
 	"go-Redis/aof"
 	"go-Redis/database"
+	"go-Redis/interface/redis"
+	"go-Redis/redis/connection"
 	"go-Redis/redis/parser"
 	"go-Redis/redis/protocol"
 	"net"
@@ -51,9 +53,10 @@ func NewHandlerWithAOF(filename string) *Handler {
 	}
 }
 func (h *Handler) Handle(ctx context.Context, conn net.Conn) {
-	defer conn.Close()
+
 	ch := parser.ParseStream(conn)
-	selectedDB := 0
+	client := connection.NewConn(conn)
+	defer client.Close()
 	for payload := range ch {
 		if payload.Err != nil {
 			return
@@ -61,9 +64,10 @@ func (h *Handler) Handle(ctx context.Context, conn net.Conn) {
 		if len(payload.Data) == 0 {
 			continue
 		}
-		reply, newDB := h.Exec(selectedDB, payload.Data)
-		selectedDB = newDB
-		_, _ = conn.Write(reply.ToBytes())
+		reply := h.Exec(client, payload.Data)
+		if reply != nil {
+			_, _ = client.Write(reply.ToBytes())
+		}
 
 	}
 }
@@ -110,50 +114,50 @@ func makeAofCmdLine(db *database.DB, cmdLine [][]byte) [][]byte {
 		[]byte(strconv.FormatInt(expireAt.UnixMilli(), 10)),
 	}
 }
-func (h *Handler) Exec(selectedDB int, cmdLine [][]byte) (protocol.Reply, int) {
+func (h *Handler) Exec(c redis.Connection, cmdLine [][]byte) protocol.Reply {
 	if len(cmdLine) == 0 {
-		return protocol.NewErrReply("ERR empty command"), selectedDB
+		return protocol.NewErrReply("ERR empty command")
 	}
 	cmd := strings.ToUpper(string(cmdLine[0]))
 
 	switch cmd {
 	case "SELECT":
-		return h.execSelect(selectedDB, cmdLine)
+		return h.execSelect(c, cmdLine)
 	case "BGREWRITEAOF":
-		return h.execBGRewriteAOF(cmdLine), selectedDB
+		return h.execBGRewriteAOF(cmdLine)
 	case "SAVE":
-		return h.execSaveRDB(cmdLine), selectedDB
+		return h.execSaveRDB(cmdLine)
 	case "BGSAVE":
-		return h.execBGSaveRDB(cmdLine), selectedDB
+		return h.execBGSaveRDB(cmdLine)
 	}
-	db := h.dbSet.GetDB(selectedDB)
+	db := h.dbSet.GetDB(c.GetDBIndex())
 	if db == nil {
-		return protocol.NewErrReply("ERR DB index is out of range"), selectedDB
+		return protocol.NewErrReply("ERR DB index is out of range")
 	}
 	reply := db.Exec(cmdLine)
 	if h.persister != nil && isWriteCommand(cmd) && !isErrorReply(reply) {
-		_ = h.persister.SaveCmdLine(selectedDB, makeAofCmdLine(db, cmdLine))
+		_ = h.persister.SaveCmdLine(c.GetDBIndex(), makeAofCmdLine(db, cmdLine))
 	}
-	return reply, selectedDB
+	return reply
 }
-func (h *Handler) execSelect(selectedDB int, cmdLine [][]byte) (protocol.Reply, int) {
+func (h *Handler) execSelect(c redis.Connection, cmdLine [][]byte) protocol.Reply {
 
 	if len(cmdLine) != 2 {
-		return protocol.NewErrReply("ERR wrong number of arguments for SELECT"), selectedDB
+		return protocol.NewErrReply("ERR wrong number of arguments for SELECT")
 	}
 	index, err := strconv.Atoi(string(cmdLine[1]))
 	if err != nil {
-		return protocol.NewErrReply("ERR invalid DB index"), selectedDB
+		return protocol.NewErrReply("ERR invalid DB index")
 	}
 	if h.dbSet.GetDB(index) == nil {
-		return protocol.NewErrReply("ERR DB index is out of range"), selectedDB
+		return protocol.NewErrReply("ERR DB index is out of range")
 
 	}
-	selectedDB = index
+	c.SelectDB(index)
 	if h.persister != nil {
 		_ = h.persister.SaveCmdLine(index, cmdLine)
 	}
-	return protocol.NewStatusReply("OK"), selectedDB
+	return protocol.NewStatusReply("OK")
 }
 func (h *Handler) execBGRewriteAOF(cmdLine [][]byte) protocol.Reply {
 	if len(cmdLine) != 1 {
