@@ -8,6 +8,7 @@ import (
 )
 
 var unSubscribeNothing = []byte("*3\r\n$11\r\nunsubscribe\r\n$-1\r\n:0\r\n")
+var messageBytes = []byte("message")
 
 func makeMsg(t string, channel string, code int64) []byte {
 	return []byte(
@@ -94,5 +95,38 @@ func unSubscribe0(hub *Hub, client redis.Connection, channel string) bool {
 		hub.subs.Remove(channel)
 	}
 	return true
+
+}
+func Publish(hub *Hub, args [][]byte) protocol.Reply {
+	if len(args) != 2 {
+		return protocol.NewErrReply("ERR wrong number of arguments for PUBLISH")
+	}
+
+	channel := string(args[0])
+	message := args[1]
+	hub.subLocker.Lock(channel)
+	defer hub.subLocker.UnLock(channel)
+	raw, ok := hub.subs.Get(channel)
+	if !ok {
+		return protocol.NewIntReply(0)
+	}
+	subscribers, ok := raw.(*list.LinkedList)
+	if !ok {
+		return protocol.NewIntReply(0)
+	}
+	subscribers.ForEach(func(i int, v any) bool {
+		client, ok := v.(redis.Connection)
+		if !ok {
+			return true
+		}
+		replyArgs := [][]byte{
+			messageBytes,
+			[]byte(channel),
+			message,
+		}
+		_, _ = client.Write(protocol.NewMultiBulkReply(replyArgs).ToBytes())
+		return true
+	})
+	return protocol.NewIntReply(int64(subscribers.Len()))
 
 }
