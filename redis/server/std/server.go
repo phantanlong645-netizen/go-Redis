@@ -5,6 +5,7 @@ import (
 	"go-Redis/aof"
 	"go-Redis/database"
 	"go-Redis/interface/redis"
+	"go-Redis/pubsub"
 	"go-Redis/redis/connection"
 	"go-Redis/redis/parser"
 	"go-Redis/redis/protocol"
@@ -17,6 +18,7 @@ import (
 type Handler struct {
 	dbSet     *database.DBSet
 	persister *aof.Persister
+	hub       *pubsub.Hub
 }
 
 func NewHandler() *Handler {
@@ -50,6 +52,7 @@ func NewHandlerWithAOF(filename string) *Handler {
 	return &Handler{
 		dbSet:     dbSet,
 		persister: persister,
+		hub:       pubsub.MakeHub(),
 	}
 }
 func (h *Handler) Handle(ctx context.Context, conn net.Conn) {
@@ -129,6 +132,12 @@ func (h *Handler) Exec(c redis.Connection, cmdLine [][]byte) protocol.Reply {
 		return h.execSaveRDB(cmdLine)
 	case "BGSAVE":
 		return h.execBGSaveRDB(cmdLine)
+	case "PUBLISH":
+		return pubsub.Publish(h.hub, cmdLine[1:])
+	case "SUBSCRIBE":
+		return pubsub.Subscribe(h.hub, c, cmdLine[1:])
+	case "UNSUBSCRIBE":
+		return pubsub.UnSubscribe(h.hub, c, cmdLine[1:])
 	}
 	db := h.dbSet.GetDB(c.GetDBIndex())
 	if db == nil {
