@@ -9,4 +9,8 @@ type Connection interface {
 	GetChannels() []string
 	GetDBIndex() int
 	SelectDB(int)
+	SetSlave()
+	IsSlave() bool
+	SetMaster()
+	IsMaster() bool
 }

@@ -5,11 +5,17 @@ import (
 	"sync"
 )
 
+const (
+	flagSlave = uint64(1 << iota)
+	flagMaster
+)
+
 type Connection struct {
 	conn       net.Conn
 	selectedDB int
 	subs       map[string]struct{}
 	mu         sync.Mutex
+	flags      uint64
 }
 
 func NewConn(conn net.Conn) *Connection {
@@ -57,4 +63,17 @@ func (c *Connection) GetDBIndex() int {
 
 func (c *Connection) SelectDB(dbIndex int) {
 	c.selectedDB = dbIndex
+}
+func (c *Connection) SetSlave() {
+	c.flags |= flagSlave
+
+}
+func (c *Connection) IsSlave() bool {
+	return c.flags&flagSlave > 0
+}
+func (c *Connection) SetMaster() {
+	c.flags |= flagMaster
+}
+func (c *Connection) IsMaster() bool {
+	return c.flags&flagMaster > 0
 }

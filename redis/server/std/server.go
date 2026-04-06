@@ -13,12 +13,23 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
+)
+
+const (
+	masterRole = int32(iota)
+	slaveRole
 )
 
 type Handler struct {
 	dbSet     *database.DBSet
 	persister *aof.Persister
 	hub       *pubsub.Hub
+	role      int32
+
+	slaveMu sync.Mutex
+	slaves  []redis.Connection
 }
 
 func NewHandler() *Handler {
@@ -53,6 +64,8 @@ func NewHandlerWithAOF(filename string) *Handler {
 		dbSet:     dbSet,
 		persister: persister,
 		hub:       pubsub.MakeHub(),
+		role:      masterRole,
+		slaves:    make([]redis.Connection, 0),
 	}
 }
 func (h *Handler) Handle(ctx context.Context, conn net.Conn) {
@@ -207,5 +220,25 @@ func (h *Handler) execBGSaveRDB(cmdLine [][]byte) protocol.Reply {
 		_ = h.persister.GenerateRDB("dump.rdb")
 	}()
 	return protocol.NewStatusReply("Background saving started")
+
+}
+func (h *Handler) isMasterRole() bool {
+	return atomic.LoadInt32(&h.role) == masterRole
+}
+func (h *Handler) isSlaveRole() bool {
+	return atomic.LoadInt32(&h.role) == slaveRole
+}
+func (h *Handler) addSlave(c redis.Connection) {
+	h.slaveMu.Lock()
+	defer h.slaveMu.Unlock()
+	h.slaves = append(h.slaves, c)
+
+}
+func (h *Handler) getSlaves() []redis.Connection {
+	h.slaveMu.Lock()
+	defer h.slaveMu.Unlock()
+	res := make([]redis.Connection, 0)
+	copy(res, h.slaves)
+	return res
 
 }
