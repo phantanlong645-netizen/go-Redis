@@ -16,6 +16,7 @@ type Connection struct {
 	subs       map[string]struct{}
 	mu         sync.Mutex
 	flags      uint64
+	offset     int64
 }
 
 func NewConn(conn net.Conn) *Connection {
@@ -76,4 +77,13 @@ func (c *Connection) SetMaster() {
 }
 func (c *Connection) IsMaster() bool {
 	return c.flags&flagMaster > 0
+}
+func (c *Connection) GetOffset() int64 {
+	return c.offset
+}
+func (c *Connection) SetOffset(offset int64) {
+	c.offset = offset
+}
+func (c *Connection) AddOffset(delta int64) {
+	c.offset += delta
 }

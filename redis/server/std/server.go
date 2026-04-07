@@ -40,6 +40,8 @@ type Handler struct {
 	masterChan <-chan *parser.Payload
 	masterCtx  context.Context
 	cancel     context.CancelFunc
+
+	replOffset int64
 }
 
 func NewHandler() *Handler {
@@ -471,10 +473,13 @@ func (h *Handler) connectMaster() error {
 func (h *Handler) propagateToSlaves(cmdLine [][]byte) {
 	reply := protocol.NewMultiBulkReply(cmdLine)
 	data := reply.ToBytes()
-	for _, slave := range h.getSlaves() {
-		_, _ = slave.Write(data)
-	}
+	currentOffset := h.addReplOffset(int64(len(data)))
 
+	for _, slave := range h.getSlaves() {
+		if _, err := slave.Write(data); err == nil {
+			slave.AddOffset(currentOffset)
+		}
+	}
 }
 func (h *Handler) receiveMasterCommands() {
 	for {
@@ -512,4 +517,10 @@ func (h *Handler) removeSlave(c redis.Connection) {
 	}
 	h.slaves = filterd
 
+}
+func (h *Handler) getReplOffset() int64 {
+	return atomic.LoadInt64(&h.replOffset)
+}
+func (h *Handler) addReplOffset(delta int64) int64 {
+	return atomic.AddInt64(&h.replOffset, delta)
 }

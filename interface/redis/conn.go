@@ -13,4 +13,7 @@ type Connection interface {
 	IsSlave() bool
 	SetMaster()
 	IsMaster() bool
+	GetOffset() int64
+	SetOffset(int64)
+	AddOffset(int64)
 }
