@@ -1,9 +1,7 @@
 package std
 
 import (
-	"bufio"
 	"context"
-	"fmt"
 	"go-Redis/aof"
 	"go-Redis/database"
 	"go-Redis/interface/redis"
@@ -11,10 +9,8 @@ import (
 	"go-Redis/redis/connection"
 	"go-Redis/redis/parser"
 	"go-Redis/redis/protocol"
-	"io"
 	"net"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -169,8 +165,6 @@ func (h *Handler) Exec(c redis.Connection, cmdLine [][]byte) protocol.Reply {
 		return h.execSlaveOf(cmdLine[1:])
 	case "REPLCONF":
 		return h.execReplConf(c, cmdLine[1:])
-	case "PSYNC":
-		return h.execPSync(c, cmdLine[1:])
 	}
 	if h.isSlaveRole() && isWriteCommand(cmd) && !c.IsMaster() {
 		return protocol.NewErrReply("READONLY You can't write against a read only slave.")
@@ -190,20 +184,6 @@ func (h *Handler) Exec(c redis.Connection, cmdLine [][]byte) protocol.Reply {
 
 	}
 	return reply
-}
-func (h *Handler) execPSync(c redis.Connection, args [][]byte) protocol.Reply {
-	if len(args) != 2 {
-		return protocol.NewErrReply("ERR wrong number of arguments for PSYNC")
-	}
-	if !c.IsSlave() {
-		c.SetSlave()
-		h.addSlave(c)
-	}
-	if err := h.sendFullResync(c); err != nil {
-		return protocol.NewErrReply("ERR send full resync failed")
-	}
-	return &protocol.NoReply{}
-
 }
 func (h *Handler) execReplConf(c redis.Connection, args [][]byte) protocol.Reply {
 	if len(args) != 2 {
@@ -338,35 +318,6 @@ func (h *Handler) getSlaves() []redis.Connection {
 	return res
 
 }
-func (h *Handler) sendFullResync(c redis.Connection) error {
-	tmpDir, err := os.MkdirTemp("", "go-redis-fullresync-*")
-	if err != nil {
-		return err
-	}
-	defer os.RemoveAll(tmpDir)
-	rdbFile := filepath.Join(tmpDir, "dump.rdb")
-	if err := h.persister.GenerateRDB(rdbFile); err != nil {
-		return err
-	}
-	data, err := os.ReadFile(rdbFile)
-	if err != nil {
-		return err
-	}
-	if _, err := c.Write([]byte("+FULLRESYNC ? 0\r\n")); err != nil {
-		return err
-	}
-	if _, err := c.Write([]byte("$" + strconv.Itoa(len(data)) + "\r\n")); err != nil {
-		return err
-	}
-	if _, err := c.Write(data); err != nil {
-		return err
-	}
-	if _, err := c.Write([]byte("\r\n")); err != nil {
-		return err
-	}
-	return nil
-
-}
 func (h *Handler) connectMaster() error {
 	address := net.JoinHostPort(h.masterHost, h.masterPort)
 	conn, err := net.Dial("tcp", address)
@@ -375,9 +326,9 @@ func (h *Handler) connectMaster() error {
 	}
 	masterConn := connection.NewConn(conn)
 	masterConn.SetMaster()
-	reader := bufio.NewReader(conn)
+	masterChan := parser.ParseStream(conn)
 	ctx, cancel := context.WithCancel(context.Background())
-
+	h.masterChan = masterChan
 	h.masterCtx = ctx
 	h.cancel = cancel
 
@@ -390,82 +341,9 @@ func (h *Handler) connectMaster() error {
 		_ = conn.Close()
 		return err
 	}
-	line, err := reader.ReadString('\n')
-	if err != nil {
-		_ = conn.Close()
-		return err
-	}
-	if line != "+OK\r\n" {
-		_ = conn.Close()
-		return fmt.Errorf("unexpected REPLCONF reply: %s", strings.TrimSpace(line))
-	}
 
-	psync := protocol.NewMultiBulkReply([][]byte{
-		[]byte("PSYNC"),
-		[]byte("?"),
-		[]byte("-1"),
-	})
-	if _, err := conn.Write(psync.ToBytes()); err != nil {
-		_ = conn.Close()
-		return err
-	}
-	line, err = reader.ReadString('\n')
-	if err != nil {
-		_ = conn.Close()
-		return err
-	}
-	if !strings.HasPrefix(line, "+FULLRESYNC") {
-		_ = conn.Close()
-		return fmt.Errorf("unexpected PSYNC reply: %s", strings.TrimSpace(line))
-	}
-	line, err = reader.ReadString('\n')
-	if err != nil {
-		_ = conn.Close()
-		return err
-	}
-	if !strings.HasPrefix(line, "$") {
-		_ = conn.Close()
-		return fmt.Errorf("unexpected RDB bulk header: %s", strings.TrimSpace(line))
-	}
-	rdbLen, err := strconv.Atoi(strings.TrimSpace(line[1:]))
-	if err != nil || rdbLen < 0 {
-		_ = conn.Close()
-		return fmt.Errorf("invalid RDB length: %s", strings.TrimSpace(line))
-	}
-	rdbData := make([]byte, rdbLen)
-	if _, err := io.ReadFull(reader, rdbData); err != nil {
-		_ = conn.Close()
-		return err
-	}
-	tail := make([]byte, 2)
-	if _, err := io.ReadFull(reader, tail); err != nil {
-		_ = conn.Close()
-		return err
-	}
-	if string(tail) != "\r\n" {
-		_ = conn.Close()
-		return fmt.Errorf("unexpected RDB bulk footer: %s", strings.TrimSpace(line))
-	}
-	tmpDir, err := os.MkdirTemp("", "go-redis-load-rdb-*")
-	if err != nil {
-		_ = conn.Close()
-		return err
-	}
-	defer os.RemoveAll(tmpDir)
-	rdbFile := filepath.Join(tmpDir, "dump.rdb")
-	if err := os.WriteFile(rdbFile, rdbData, 0644); err != nil {
-		_ = conn.Close()
-		return err
-	}
-	if err := aof.LoadRDBFile(h.dbSet, rdbFile); err != nil {
-		_ = conn.Close()
-		return err
-	}
-	masterChan := parser.ParseStream(reader)
-	h.masterChan = masterChan
 	h.masterConn = masterConn
 	go h.receiveMasterCommands()
-
 	return nil
 }
 func (h *Handler) propagateToSlaves(cmdLine [][]byte) {
