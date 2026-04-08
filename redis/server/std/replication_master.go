@@ -21,4 +21,12 @@ type masterStatus struct {
 	mu           sync.RWMutex
 	slaveMap     map[redis.Connection]*slaveClient
 	onlineSlaves map[*slaveClient]struct{}
+	replOffset   int64
+}
+
+func initMasterStatus() *masterStatus {
+	return &masterStatus{
+		slaveMap:     make(map[redis.Connection]*slaveClient),
+		onlineSlaves: make(map[*slaveClient]struct{}),
+	}
 }

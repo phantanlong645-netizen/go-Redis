@@ -18,6 +18,7 @@ import (
 	"strconv"
 	"strings"
 	"sync/atomic"
+	"time"
 )
 
 const (
@@ -31,18 +32,14 @@ type Handler struct {
 	hub       *pubsub.Hub
 	role      int32
 
-	masterStatus *masterStatus
-	masterHost   string
-	masterPort   string
-	masterConn   redis.Connection
-	masterChan   <-chan *parser.Payload
-	masterCtx    context.Context
-	cancel       context.CancelFunc
-
-	masterReplOffset       int64
-	replBacklog            []byte
-	replBacklogSize        int64
-	replBacklogStartOffset int64
+	masterStatus    *masterStatus
+	masterHost      string
+	masterPort      string
+	masterConn      redis.Connection
+	masterChan      <-chan *parser.Payload
+	masterCtx       context.Context
+	cancel          context.CancelFunc
+	slaveReplOffset int64
 }
 
 func NewHandler() *Handler {
@@ -50,7 +47,6 @@ func NewHandler() *Handler {
 
 }
 func NewHandlerWithAOF(filename string) *Handler {
-	const replBacklogSize = 1024 * 1024
 	dbSet := database.NewDBSet()
 	_, statErr := os.Stat(filename)
 	aofExists := statErr == nil
@@ -75,19 +71,12 @@ func NewHandlerWithAOF(filename string) *Handler {
 		}
 	}
 	return &Handler{
-		dbSet:     dbSet,
-		persister: persister,
-		hub:       pubsub.MakeHub(),
-		role:      masterRole,
-		masterStatus: &masterStatus{
-			slaveMap:     make(map[redis.Connection]*slaveClient),
-			onlineSlaves: make(map[*slaveClient]struct{}),
-		},
-		masterConn:             nil,
-		masterReplOffset:       0,
-		replBacklog:            make([]byte, 0, replBacklogSize),
-		replBacklogSize:        replBacklogSize,
-		replBacklogStartOffset: 0,
+		dbSet:        dbSet,
+		persister:    persister,
+		hub:          pubsub.MakeHub(),
+		role:         masterRole,
+		masterStatus: initMasterStatus(),
+		masterConn:   nil,
 	}
 }
 func (h *Handler) Handle(ctx context.Context, conn net.Conn) {
@@ -228,6 +217,21 @@ func (h *Handler) execReplConf(c redis.Connection, args [][]byte) protocol.Reply
 			h.addSlave(c)
 		}
 		return protocol.NewStatusReply("OK")
+	case "ACK":
+		offset, err := strconv.ParseInt(string(args[1]), 10, 64)
+		if err != nil {
+			return protocol.NewErrReply("ERR invalid ACK offset")
+		}
+		h.masterStatus.mu.Lock()
+		defer h.masterStatus.mu.Unlock()
+		slave := h.masterStatus.slaveMap[c]
+		if slave == nil {
+			return &protocol.NoReply{}
+		}
+		slave.offset = offset
+		slave.lastAckTime = time.Now()
+		return &protocol.NoReply{}
+
 	default:
 		return protocol.NewStatusReply("OK")
 	}
@@ -307,6 +311,7 @@ func (h *Handler) execSlaveOf(args [][]byte) protocol.Reply {
 			h.cancel()
 			h.cancel = nil
 		}
+		h.slaveReplOffset = 0
 		h.masterChan = nil
 		h.masterCtx = nil
 		if h.masterConn != nil {
@@ -318,6 +323,7 @@ func (h *Handler) execSlaveOf(args [][]byte) protocol.Reply {
 	atomic.StoreInt32(&h.role, slaveRole)
 	h.masterHost = host
 	h.masterPort = port
+	h.slaveReplOffset = 0
 	if err := h.connectMaster(); err != nil {
 		atomic.StoreInt32(&h.role, masterRole)
 		h.masterHost = ""
@@ -338,18 +344,22 @@ func (h *Handler) isSlaveRole() bool {
 func (h *Handler) addSlave(c redis.Connection) {
 	h.masterStatus.mu.Lock()
 	defer h.masterStatus.mu.Unlock()
-	h.masterStatus.slaveMap[c] = &slaveClient{
-		conn:  c,
-		state: slaveStateHandshake,
+	if _, exist := h.masterStatus.slaveMap[c]; exist {
+		return
 	}
-
+	h.masterStatus.slaveMap[c] = &slaveClient{
+		conn:        c,
+		state:       slaveStateHandshake,
+		offset:      0,
+		lastAckTime: time.Now(),
+	}
 }
-func (h *Handler) getSlaves() []redis.Connection {
-	h.masterStatus.mu.Lock()
-	defer h.masterStatus.mu.Unlock()
-	res := make([]redis.Connection, 0, len(h.masterStatus.slaveMap))
-	for k, _ := range h.masterStatus.slaveMap {
-		res = append(res, k)
+func (h *Handler) getSlaves() []*slaveClient {
+	h.masterStatus.mu.RLock()
+	defer h.masterStatus.mu.RUnlock()
+	res := make([]*slaveClient, 0, len(h.masterStatus.slaveMap))
+	for _, slave := range h.masterStatus.slaveMap {
+		res = append(res, slave)
 	}
 	return res
 
@@ -487,11 +497,11 @@ func (h *Handler) connectMaster() error {
 func (h *Handler) propagateToSlaves(cmdLine [][]byte) {
 	reply := protocol.NewMultiBulkReply(cmdLine)
 	data := reply.ToBytes()
+	h.addReplOffset(int64(len(data)))
 
 	for _, slave := range h.getSlaves() {
-		if _, err := slave.Write(data); err == nil {
+		_, _ = slave.conn.Write(data)
 
-		}
 	}
 }
 func (h *Handler) receiveMasterCommands() {
@@ -507,11 +517,28 @@ func (h *Handler) receiveMasterCommands() {
 			if len(payload.Data) == 0 {
 				continue
 			}
+			reply := protocol.NewMultiBulkReply(payload.Data)
+			h.addSlaveReplOffset(int64(len(reply.ToBytes())))
 			_ = h.Exec(h.masterConn, payload.Data)
+			_ = h.sendAckToMaster()
 		case <-h.masterCtx.Done():
 			return
 		}
 	}
+}
+func (h *Handler) sendAckToMaster() error {
+	if h.masterConn == nil {
+		return nil
+	}
+	cmdLine := [][]byte{
+		[]byte("REPLCONF"),
+		[]byte("ACK"),
+		[]byte(strconv.FormatInt(h.slaveReplOffset, 10)),
+	}
+	replyAck := protocol.NewMultiBulkReply(cmdLine)
+	_, err := h.masterConn.Write(replyAck.ToBytes())
+	return err
+
 }
 func (h *Handler) afterClientClose(c redis.Connection) {
 	pubsub.UnSubscribe(h.hub, c, nil)
@@ -522,16 +549,29 @@ func (h *Handler) afterClientClose(c redis.Connection) {
 func (h *Handler) removeSlave(c redis.Connection) {
 	h.masterStatus.mu.Lock()
 	defer h.masterStatus.mu.Unlock()
-	slave, ok := h.masterStatus.slaveMap[c]
-	if ok {
-		delete(h.masterStatus.slaveMap, c)
+
+	slave := h.masterStatus.slaveMap[c]
+	if slave != nil {
 		delete(h.masterStatus.onlineSlaves, slave)
 	}
+	delete(h.masterStatus.slaveMap, c)
 
 }
 func (h *Handler) getReplOffset() int64 {
-	return atomic.LoadInt64(&h.masterReplOffset)
+	h.masterStatus.mu.RLock()
+	defer h.masterStatus.mu.RUnlock()
+	return h.masterStatus.replOffset
 }
 func (h *Handler) addReplOffset(delta int64) int64 {
-	return atomic.AddInt64(&h.masterReplOffset, delta)
+	h.masterStatus.mu.Lock()
+	defer h.masterStatus.mu.Unlock()
+	h.masterStatus.replOffset += delta
+	return h.masterStatus.replOffset
+}
+func (h *Handler) getSlaveReplOffset() int64 {
+	return atomic.LoadInt64(&h.slaveReplOffset)
+}
+
+func (h *Handler) addSlaveReplOffset(delta int64) int64 {
+	return atomic.AddInt64(&h.slaveReplOffset, delta)
 }
