@@ -17,7 +17,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"sync"
 	"sync/atomic"
 )
 
@@ -32,16 +31,18 @@ type Handler struct {
 	hub       *pubsub.Hub
 	role      int32
 
-	slaveMu    sync.Mutex
-	slaves     []redis.Connection
-	masterHost string
-	masterPort string
-	masterConn redis.Connection
-	masterChan <-chan *parser.Payload
-	masterCtx  context.Context
-	cancel     context.CancelFunc
+	masterStatus *masterStatus
+	masterHost   string
+	masterPort   string
+	masterConn   redis.Connection
+	masterChan   <-chan *parser.Payload
+	masterCtx    context.Context
+	cancel       context.CancelFunc
 
-	replOffset int64
+	masterReplOffset       int64
+	replBacklog            []byte
+	replBacklogSize        int64
+	replBacklogStartOffset int64
 }
 
 func NewHandler() *Handler {
@@ -49,6 +50,7 @@ func NewHandler() *Handler {
 
 }
 func NewHandlerWithAOF(filename string) *Handler {
+	const replBacklogSize = 1024 * 1024
 	dbSet := database.NewDBSet()
 	_, statErr := os.Stat(filename)
 	aofExists := statErr == nil
@@ -73,12 +75,19 @@ func NewHandlerWithAOF(filename string) *Handler {
 		}
 	}
 	return &Handler{
-		dbSet:      dbSet,
-		persister:  persister,
-		hub:        pubsub.MakeHub(),
-		role:       masterRole,
-		slaves:     make([]redis.Connection, 0),
-		masterConn: nil,
+		dbSet:     dbSet,
+		persister: persister,
+		hub:       pubsub.MakeHub(),
+		role:      masterRole,
+		masterStatus: &masterStatus{
+			slaveMap:     make(map[redis.Connection]*slaveClient),
+			onlineSlaves: make(map[*slaveClient]struct{}),
+		},
+		masterConn:             nil,
+		masterReplOffset:       0,
+		replBacklog:            make([]byte, 0, replBacklogSize),
+		replBacklogSize:        replBacklogSize,
+		replBacklogStartOffset: 0,
 	}
 }
 func (h *Handler) Handle(ctx context.Context, conn net.Conn) {
@@ -327,16 +336,21 @@ func (h *Handler) isSlaveRole() bool {
 	return atomic.LoadInt32(&h.role) == slaveRole
 }
 func (h *Handler) addSlave(c redis.Connection) {
-	h.slaveMu.Lock()
-	defer h.slaveMu.Unlock()
-	h.slaves = append(h.slaves, c)
+	h.masterStatus.mu.Lock()
+	defer h.masterStatus.mu.Unlock()
+	h.masterStatus.slaveMap[c] = &slaveClient{
+		conn:  c,
+		state: slaveStateHandshake,
+	}
 
 }
 func (h *Handler) getSlaves() []redis.Connection {
-	h.slaveMu.Lock()
-	defer h.slaveMu.Unlock()
-	res := make([]redis.Connection, len(h.slaves))
-	copy(res, h.slaves)
+	h.masterStatus.mu.Lock()
+	defer h.masterStatus.mu.Unlock()
+	res := make([]redis.Connection, 0, len(h.masterStatus.slaveMap))
+	for k, _ := range h.masterStatus.slaveMap {
+		res = append(res, k)
+	}
 	return res
 
 }
@@ -473,11 +487,10 @@ func (h *Handler) connectMaster() error {
 func (h *Handler) propagateToSlaves(cmdLine [][]byte) {
 	reply := protocol.NewMultiBulkReply(cmdLine)
 	data := reply.ToBytes()
-	currentOffset := h.addReplOffset(int64(len(data)))
 
 	for _, slave := range h.getSlaves() {
 		if _, err := slave.Write(data); err == nil {
-			slave.AddOffset(currentOffset)
+
 		}
 	}
 }
@@ -507,20 +520,18 @@ func (h *Handler) afterClientClose(c redis.Connection) {
 	}
 }
 func (h *Handler) removeSlave(c redis.Connection) {
-	h.slaveMu.Lock()
-	defer h.slaveMu.Unlock()
-	filterd := make([]redis.Connection, 0, len(h.slaves))
-	for _, slave := range h.slaves {
-		if slave != c {
-			filterd = append(filterd, slave)
-		}
+	h.masterStatus.mu.Lock()
+	defer h.masterStatus.mu.Unlock()
+	slave, ok := h.masterStatus.slaveMap[c]
+	if ok {
+		delete(h.masterStatus.slaveMap, c)
+		delete(h.masterStatus.onlineSlaves, slave)
 	}
-	h.slaves = filterd
 
 }
 func (h *Handler) getReplOffset() int64 {
-	return atomic.LoadInt64(&h.replOffset)
+	return atomic.LoadInt64(&h.masterReplOffset)
 }
 func (h *Handler) addReplOffset(delta int64) int64 {
-	return atomic.AddInt64(&h.replOffset, delta)
+	return atomic.AddInt64(&h.masterReplOffset, delta)
 }
