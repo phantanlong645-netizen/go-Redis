@@ -3,6 +3,8 @@ package std
 import (
 	"bufio"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"go-Redis/aof"
 	"go-Redis/database"
@@ -40,13 +42,26 @@ type Handler struct {
 	masterCtx       context.Context
 	cancel          context.CancelFunc
 	slaveReplOffset int64
+	slaveReplID     string
 }
 
 func NewHandler() *Handler {
 	return NewHandlerWithAOF("appendonly.aof")
 
 }
+
+const replBacklogSize = 1024 * 1024
+
 func NewHandlerWithAOF(filename string) *Handler {
+
+	genReplId := func() string {
+		buf := make([]byte, 20)
+		if _, err := rand.Read(buf); err != nil {
+			return "0000000000000000000000000000000000000000"
+		}
+		return hex.EncodeToString(buf)
+	}
+
 	dbSet := database.NewDBSet()
 	_, statErr := os.Stat(filename)
 	aofExists := statErr == nil
@@ -75,7 +90,7 @@ func NewHandlerWithAOF(filename string) *Handler {
 		persister:    persister,
 		hub:          pubsub.MakeHub(),
 		role:         masterRole,
-		masterStatus: initMasterStatus(),
+		masterStatus: initMasterStatus(genReplId(), replBacklogSize),
 		masterConn:   nil,
 	}
 }
@@ -284,7 +299,6 @@ func (h *Handler) execSelect(c redis.Connection, cmdLine [][]byte) protocol.Repl
 	}
 	if h.dbSet.GetDB(index) == nil {
 		return protocol.NewErrReply("ERR DB index is out of range")
-
 	}
 	c.SelectDB(index)
 	if h.persister != nil {
@@ -348,6 +362,7 @@ func (h *Handler) execSlaveOf(args [][]byte) protocol.Reply {
 			h.cancel = nil
 		}
 		h.slaveReplOffset = 0
+		h.slaveReplID = ""
 		h.masterChan = nil
 		h.masterCtx = nil
 		if h.masterConn != nil {
@@ -359,6 +374,7 @@ func (h *Handler) execSlaveOf(args [][]byte) protocol.Reply {
 	atomic.StoreInt32(&h.role, slaveRole)
 	h.masterHost = host
 	h.masterPort = port
+	h.slaveReplID = ""
 	h.slaveReplOffset = 0
 	if err := h.connectMaster(); err != nil {
 		atomic.StoreInt32(&h.role, masterRole)
@@ -392,7 +408,9 @@ func (h *Handler) sendFullResync(slave *slaveClient) error {
 	if err != nil {
 		return err
 	}
-	if _, err := slave.conn.Write([]byte("+FULLRESYNC ? 0\r\n")); err != nil {
+	replId := h.getReplID()
+	currentoffset := h.getReplOffset()
+	if _, err := slave.conn.Write([]byte("+FULLRESYNC " + replId + " " + strconv.FormatInt(currentoffset, 10) + "\r\n")); err != nil {
 		return err
 	}
 	if _, err := slave.conn.Write([]byte("$" + strconv.Itoa(len(data)) + "\r\n")); err != nil {
@@ -440,11 +458,18 @@ func (h *Handler) connectMaster() error {
 		_ = conn.Close()
 		return fmt.Errorf("unexpected REPLCONF reply: %s", strings.TrimSpace(line))
 	}
-
+	replID := h.slaveReplID
+	if replID == "" {
+		replID = "?"
+	}
+	replOffset := h.getSlaveReplOffset()
+	if replOffset <= 0 {
+		replOffset = -1
+	}
 	psync := protocol.NewMultiBulkReply([][]byte{
 		[]byte("PSYNC"),
-		[]byte("?"),
-		[]byte("-1"),
+		[]byte(replID),
+		[]byte(strconv.FormatInt(replOffset, 10)),
 	})
 	if _, err := conn.Write(psync.ToBytes()); err != nil {
 		_ = conn.Close()
@@ -455,10 +480,24 @@ func (h *Handler) connectMaster() error {
 		_ = conn.Close()
 		return err
 	}
+	line = strings.TrimSpace(line)
 	if !strings.HasPrefix(line, "+FULLRESYNC") {
 		_ = conn.Close()
 		return fmt.Errorf("unexpected PSYNC reply: %s", strings.TrimSpace(line))
 	}
+	parts := strings.Split(line[1:], " ")
+	if len(parts) != 3 {
+		_ = conn.Close()
+		return fmt.Errorf("unexpected PSYNC reply: %s", strings.TrimSpace(line))
+	}
+	replID = parts[1]
+	replOffset, err = strconv.ParseInt(parts[2], 10, 64)
+	if err != nil {
+		_ = conn.Close()
+		return fmt.Errorf("invalid FULLRESYNC offset: %s", parts[2])
+	}
+	h.slaveReplID = replID
+	h.slaveReplOffset = replOffset
 	line, err = reader.ReadString('\n')
 	if err != nil {
 		_ = conn.Close()
@@ -512,7 +551,7 @@ func (h *Handler) connectMaster() error {
 func (h *Handler) propagateToSlaves(cmdLine [][]byte) {
 	reply := protocol.NewMultiBulkReply(cmdLine)
 	data := reply.ToBytes()
-	h.addReplOffset(int64(len(data)))
+	h.appendBacklog(data)
 
 	for _, slave := range h.getOnlineSlaves() {
 		_, _ = slave.conn.Write(data)
@@ -575,14 +614,16 @@ func (h *Handler) removeSlave(c redis.Connection) {
 func (h *Handler) getReplOffset() int64 {
 	h.masterStatus.mu.RLock()
 	defer h.masterStatus.mu.RUnlock()
-	return h.masterStatus.replOffset
+	return h.masterStatus.backlog.getCurrentOffset()
 }
-func (h *Handler) addReplOffset(delta int64) int64 {
+func (h *Handler) appendBacklog(data []byte) int64 {
 	h.masterStatus.mu.Lock()
 	defer h.masterStatus.mu.Unlock()
-	h.masterStatus.replOffset += delta
-	return h.masterStatus.replOffset
+
+	h.masterStatus.backlog.appendBytes(data)
+	return h.masterStatus.backlog.getCurrentOffset()
 }
+
 func (h *Handler) getSlaveReplOffset() int64 {
 	return atomic.LoadInt64(&h.slaveReplOffset)
 }
@@ -590,15 +631,19 @@ func (h *Handler) getSlaveReplOffset() int64 {
 func (h *Handler) addSlaveReplOffset(delta int64) int64 {
 	return atomic.AddInt64(&h.slaveReplOffset, delta)
 }
-func (h *Handler) countOnlineSlavesAtOffset(offset int64) int {
-	h.masterStatus.mu.Lock()
-	defer h.masterStatus.mu.Unlock()
-	count := 0
-	for slave := range h.masterStatus.onlineSlaves {
-		if slave.offset >= offset {
-			count++
-		}
-	}
-	return count
+func (h *Handler) getReplID() string {
+	h.masterStatus.mu.RLock()
+	defer h.masterStatus.mu.RUnlock()
+	return h.masterStatus.replId
 
+}
+func (h *Handler) getBacklogSnapshot() ([]byte, int64, int64) {
+	h.masterStatus.mu.RLock()
+	defer h.masterStatus.mu.RUnlock()
+	return h.masterStatus.backlog.snapshot()
+}
+func (h *Handler) getBacklogSnapshotAfter(offset int64) ([]byte, int64, bool) {
+	h.masterStatus.mu.RLock()
+	defer h.masterStatus.mu.RUnlock()
+	return h.masterStatus.backlog.snapshotAfter(offset)
 }
