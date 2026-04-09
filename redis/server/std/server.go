@@ -246,12 +246,31 @@ func (h *Handler) execPSync(c redis.Connection, args [][]byte) protocol.Reply {
 	if !c.IsSlave() {
 		c.SetSlave()
 	}
+	replID := string(args[0])
+	offset, err := strconv.ParseInt(string(args[1]), 10, 64)
+	if err != nil {
+		return protocol.NewErrReply("ERR invalid PSYNC offset")
+
+	}
 	slave := h.getOrCreateSlave(c)
+	data, currentOffset, ok := h.tryPartialResync(replID, offset)
+	if ok {
+		if _, err := slave.conn.Write([]byte("+CONTINUE\r\n")); err != nil {
+			return protocol.NewErrReply("ERR send continue failed")
+		}
+		if len(data) > 0 {
+			if _, err := slave.conn.Write(data); err != nil {
+				return protocol.NewErrReply("ERR send partial resync data failed")
+			}
+		}
+		h.setSlaveOnline(slave, currentOffset)
+		return &protocol.NoReply{}
+
+	}
 	if err := h.sendFullResync(slave); err != nil {
 		return protocol.NewErrReply("ERR send full resync failed")
 	}
 	return &protocol.NoReply{}
-
 }
 func (h *Handler) execReplConf(c redis.Connection, args [][]byte) protocol.Reply {
 	if len(args) != 2 {
@@ -646,4 +665,13 @@ func (h *Handler) getBacklogSnapshotAfter(offset int64) ([]byte, int64, bool) {
 	h.masterStatus.mu.RLock()
 	defer h.masterStatus.mu.RUnlock()
 	return h.masterStatus.backlog.snapshotAfter(offset)
+}
+func (h *Handler) tryPartialResync(replID string, offset int64) ([]byte, int64, bool) {
+	h.masterStatus.mu.RLock()
+	defer h.masterStatus.mu.RUnlock()
+	if replID != h.masterStatus.replId {
+		return nil, 0, false
+	}
+	return h.masterStatus.backlog.snapshotAfter(offset)
+
 }
