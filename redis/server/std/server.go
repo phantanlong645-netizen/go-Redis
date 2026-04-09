@@ -171,6 +171,9 @@ func (h *Handler) Exec(c redis.Connection, cmdLine [][]byte) protocol.Reply {
 		return h.execReplConf(c, cmdLine[1:])
 	case "PSYNC":
 		return h.execPSync(c, cmdLine[1:])
+	case "WAIT":
+		return h.execWait(cmdLine[1:])
+
 	}
 	if h.isSlaveRole() && isWriteCommand(cmd) && !c.IsMaster() {
 		return protocol.NewErrReply("READONLY You can't write against a read only slave.")
@@ -191,15 +194,45 @@ func (h *Handler) Exec(c redis.Connection, cmdLine [][]byte) protocol.Reply {
 	}
 	return reply
 }
+func (h *Handler) execWait(args [][]byte) protocol.Reply {
+	if len(args) != 2 {
+		return protocol.NewErrReply("ERR wrong number of arguments for WAIT")
+	}
+	numReplicas, err := strconv.Atoi(string(args[0]))
+	if err != nil || numReplicas < 0 {
+		return protocol.NewErrReply("ERR wrong number of replicas for WAIT")
+	}
+	timeoutMS, err := strconv.Atoi(string(args[1]))
+	if err != nil || timeoutMS < 0 {
+		return protocol.NewErrReply("ERR wrong number of timeout for WAIT")
+	}
+	targetOffset := h.getReplOffset()
+	acked := h.countOnlineSlavesAtOffset(targetOffset)
+	if acked >= numReplicas {
+		return protocol.NewIntReply(int64(acked))
+	}
+	deadline := time.Now().Add(time.Duration(timeoutMS) * time.Millisecond)
+	for {
+		acked = h.countOnlineSlavesAtOffset(targetOffset)
+		if acked >= numReplicas {
+			return protocol.NewIntReply(int64(acked))
+		}
+		if time.Now().After(deadline) || timeoutMS == 0 {
+			return protocol.NewIntReply(int64(acked))
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+}
 func (h *Handler) execPSync(c redis.Connection, args [][]byte) protocol.Reply {
 	if len(args) != 2 {
 		return protocol.NewErrReply("ERR wrong number of arguments for PSYNC")
 	}
 	if !c.IsSlave() {
 		c.SetSlave()
-		h.addSlave(c)
 	}
-	if err := h.sendFullResync(c); err != nil {
+	slave := h.getOrCreateSlave(c)
+	if err := h.sendFullResync(slave); err != nil {
 		return protocol.NewErrReply("ERR send full resync failed")
 	}
 	return &protocol.NoReply{}
@@ -214,8 +247,8 @@ func (h *Handler) execReplConf(c redis.Connection, args [][]byte) protocol.Reply
 	case "LISTENING-PORT":
 		if !c.IsSlave() {
 			c.SetSlave()
-			h.addSlave(c)
 		}
+		h.getOrCreateSlave(c)
 		return protocol.NewStatusReply("OK")
 	case "ACK":
 		offset, err := strconv.ParseInt(string(args[1]), 10, 64)
@@ -226,6 +259,9 @@ func (h *Handler) execReplConf(c redis.Connection, args [][]byte) protocol.Reply
 		defer h.masterStatus.mu.Unlock()
 		slave := h.masterStatus.slaveMap[c]
 		if slave == nil {
+			return &protocol.NoReply{}
+		}
+		if slave.state != slaveStateOnline {
 			return &protocol.NoReply{}
 		}
 		slave.offset = offset
@@ -341,30 +377,8 @@ func (h *Handler) isMasterRole() bool {
 func (h *Handler) isSlaveRole() bool {
 	return atomic.LoadInt32(&h.role) == slaveRole
 }
-func (h *Handler) addSlave(c redis.Connection) {
-	h.masterStatus.mu.Lock()
-	defer h.masterStatus.mu.Unlock()
-	if _, exist := h.masterStatus.slaveMap[c]; exist {
-		return
-	}
-	h.masterStatus.slaveMap[c] = &slaveClient{
-		conn:        c,
-		state:       slaveStateHandshake,
-		offset:      0,
-		lastAckTime: time.Now(),
-	}
-}
-func (h *Handler) getSlaves() []*slaveClient {
-	h.masterStatus.mu.RLock()
-	defer h.masterStatus.mu.RUnlock()
-	res := make([]*slaveClient, 0, len(h.masterStatus.slaveMap))
-	for _, slave := range h.masterStatus.slaveMap {
-		res = append(res, slave)
-	}
-	return res
 
-}
-func (h *Handler) sendFullResync(c redis.Connection) error {
+func (h *Handler) sendFullResync(slave *slaveClient) error {
 	tmpDir, err := os.MkdirTemp("", "go-redis-fullresync-*")
 	if err != nil {
 		return err
@@ -378,18 +392,19 @@ func (h *Handler) sendFullResync(c redis.Connection) error {
 	if err != nil {
 		return err
 	}
-	if _, err := c.Write([]byte("+FULLRESYNC ? 0\r\n")); err != nil {
+	if _, err := slave.conn.Write([]byte("+FULLRESYNC ? 0\r\n")); err != nil {
 		return err
 	}
-	if _, err := c.Write([]byte("$" + strconv.Itoa(len(data)) + "\r\n")); err != nil {
+	if _, err := slave.conn.Write([]byte("$" + strconv.Itoa(len(data)) + "\r\n")); err != nil {
 		return err
 	}
-	if _, err := c.Write(data); err != nil {
+	if _, err := slave.conn.Write(data); err != nil {
 		return err
 	}
-	if _, err := c.Write([]byte("\r\n")); err != nil {
+	if _, err := slave.conn.Write([]byte("\r\n")); err != nil {
 		return err
 	}
+	h.setSlaveOnline(slave, h.getReplOffset())
 	return nil
 
 }
@@ -499,7 +514,7 @@ func (h *Handler) propagateToSlaves(cmdLine [][]byte) {
 	data := reply.ToBytes()
 	h.addReplOffset(int64(len(data)))
 
-	for _, slave := range h.getSlaves() {
+	for _, slave := range h.getOnlineSlaves() {
 		_, _ = slave.conn.Write(data)
 
 	}
@@ -574,4 +589,16 @@ func (h *Handler) getSlaveReplOffset() int64 {
 
 func (h *Handler) addSlaveReplOffset(delta int64) int64 {
 	return atomic.AddInt64(&h.slaveReplOffset, delta)
+}
+func (h *Handler) countOnlineSlavesAtOffset(offset int64) int {
+	h.masterStatus.mu.Lock()
+	defer h.masterStatus.mu.Unlock()
+	count := 0
+	for slave := range h.masterStatus.onlineSlaves {
+		if slave.offset >= offset {
+			count++
+		}
+	}
+	return count
+
 }

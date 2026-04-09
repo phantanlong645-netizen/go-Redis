@@ -40,4 +40,5 @@ var Router = map[string]*Command{
 	"DECR":      {execDecr, 1},
 	"DBSIZE":    {execDBSize, 0},
 	"PEXPIREAT": {execPExpireAt, 2},
+	"WAIT":      {nil, 2},
 }
