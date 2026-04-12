@@ -445,6 +445,70 @@ func (h *Handler) sendFullResync(slave *slaveClient) error {
 	return nil
 
 }
+func (h *Handler) handlePSyncReply(line string, reader *bufio.Reader, masterConn redis.Connection) error {
+	line = strings.TrimSpace(line)
+	if strings.HasPrefix(line, "+CONTINUE") {
+		h.masterChan = parser.ParseStream(reader)
+		h.masterConn = masterConn
+		go h.receiveMasterCommands()
+		return nil
+	}
+	if !strings.HasPrefix(line, "+FULLRESYNC") {
+		return fmt.Errorf("unexpected PSYNC reply: %s", strings.TrimSpace(line))
+	}
+	parts := strings.Split(line[1:], " ")
+	if len(parts) != 3 {
+		return fmt.Errorf("unexpected PSYNC reply: %s", strings.TrimSpace(line))
+	}
+	replID := parts[1]
+	replOffset, err := strconv.ParseInt(parts[2], 10, 64)
+	if err != nil {
+		return fmt.Errorf("invalid FULLRESYNC offset: %s", parts[2])
+	}
+	h.slaveReplID = replID
+	h.slaveReplOffset = replOffset
+	line, err = reader.ReadString('\n')
+	if err != nil {
+		return err
+	}
+	if !strings.HasPrefix(line, "$") {
+		return fmt.Errorf("unexpected PSYNC reply: %s", strings.TrimSpace(line))
+	}
+
+	rdblen, err := strconv.Atoi(strings.TrimSpace(line[1:]))
+	if err != nil || rdblen < 0 {
+		return fmt.Errorf("invalid RDB length: %s", strings.TrimSpace(line))
+	}
+
+	rdbData := make([]byte, rdblen)
+	if _, err := io.ReadFull(reader, rdbData); err != nil {
+		return err
+	}
+	tail := make([]byte, 2)
+	if _, err := io.ReadFull(reader, tail); err != nil {
+		return err
+	}
+	if string(tail) != "\r\n" {
+		return fmt.Errorf("invalid tail: %s", strings.TrimSpace(line))
+	}
+	tmpdir, err := os.MkdirTemp("", "go-redis-fullresync-*")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(tmpdir)
+	rdbFile := filepath.Join(tmpdir, "dump.rdb")
+	if err := os.WriteFile(rdbFile, rdbData, 0644); err != nil {
+		return err
+	}
+	if err := aof.LoadRDBFile(h.dbSet, rdbFile); err != nil {
+		return err
+	}
+	h.masterChan = parser.ParseStream(reader)
+	h.masterConn = masterConn
+	go h.receiveMasterCommands()
+	return nil
+}
+
 func (h *Handler) connectMaster() error {
 	address := net.JoinHostPort(h.masterHost, h.masterPort)
 	conn, err := net.Dial("tcp", address)
@@ -499,72 +563,10 @@ func (h *Handler) connectMaster() error {
 		_ = conn.Close()
 		return err
 	}
-	line = strings.TrimSpace(line)
-	if !strings.HasPrefix(line, "+FULLRESYNC") {
-		_ = conn.Close()
-		return fmt.Errorf("unexpected PSYNC reply: %s", strings.TrimSpace(line))
-	}
-	parts := strings.Split(line[1:], " ")
-	if len(parts) != 3 {
-		_ = conn.Close()
-		return fmt.Errorf("unexpected PSYNC reply: %s", strings.TrimSpace(line))
-	}
-	replID = parts[1]
-	replOffset, err = strconv.ParseInt(parts[2], 10, 64)
-	if err != nil {
-		_ = conn.Close()
-		return fmt.Errorf("invalid FULLRESYNC offset: %s", parts[2])
-	}
-	h.slaveReplID = replID
-	h.slaveReplOffset = replOffset
-	line, err = reader.ReadString('\n')
-	if err != nil {
+	if err := h.handlePSyncReply(line, reader, masterConn); err != nil {
 		_ = conn.Close()
 		return err
 	}
-	if !strings.HasPrefix(line, "$") {
-		_ = conn.Close()
-		return fmt.Errorf("unexpected RDB bulk header: %s", strings.TrimSpace(line))
-	}
-	rdbLen, err := strconv.Atoi(strings.TrimSpace(line[1:]))
-	if err != nil || rdbLen < 0 {
-		_ = conn.Close()
-		return fmt.Errorf("invalid RDB length: %s", strings.TrimSpace(line))
-	}
-	rdbData := make([]byte, rdbLen)
-	if _, err := io.ReadFull(reader, rdbData); err != nil {
-		_ = conn.Close()
-		return err
-	}
-	tail := make([]byte, 2)
-	if _, err := io.ReadFull(reader, tail); err != nil {
-		_ = conn.Close()
-		return err
-	}
-	if string(tail) != "\r\n" {
-		_ = conn.Close()
-		return fmt.Errorf("unexpected RDB bulk footer: %s", strings.TrimSpace(line))
-	}
-	tmpDir, err := os.MkdirTemp("", "go-redis-load-rdb-*")
-	if err != nil {
-		_ = conn.Close()
-		return err
-	}
-	defer os.RemoveAll(tmpDir)
-	rdbFile := filepath.Join(tmpDir, "dump.rdb")
-	if err := os.WriteFile(rdbFile, rdbData, 0644); err != nil {
-		_ = conn.Close()
-		return err
-	}
-	if err := aof.LoadRDBFile(h.dbSet, rdbFile); err != nil {
-		_ = conn.Close()
-		return err
-	}
-	masterChan := parser.ParseStream(reader)
-	h.masterChan = masterChan
-	h.masterConn = masterConn
-	go h.receiveMasterCommands()
-
 	return nil
 }
 func (h *Handler) propagateToSlaves(cmdLine [][]byte) {
