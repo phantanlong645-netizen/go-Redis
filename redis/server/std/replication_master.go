@@ -28,18 +28,25 @@ type replBacklog struct {
 	buf           []byte
 	beginOffset   int64
 	currentOffset int64
-	maxSize       int64
+	maxSize       int
+	start         int
+	size          int
 }
 
-func newReplBacklog(maxSize int64) *replBacklog {
+func newReplBacklog(maxSize int) *replBacklog {
+	if maxSize <= 0 {
+		maxSize = 1
+	}
 	return &replBacklog{
 		buf:           make([]byte, 0, maxSize),
 		beginOffset:   0,
 		currentOffset: 0,
 		maxSize:       maxSize,
+		size:          0,
+		start:         0,
 	}
 }
-func initMasterStatus(replId string, backlogSize int64) *masterStatus {
+func initMasterStatus(replId string, backlogSize int) *masterStatus {
 	return &masterStatus{
 		replId:       replId,
 		slaveMap:     make(map[redis.Connection]*slaveClient),
@@ -85,14 +92,21 @@ func (b *replBacklog) appendBytes(p []byte) {
 	if len(p) == 0 {
 		return
 	}
-	b.buf = append(b.buf, p...)
-	b.currentOffset += int64(len(p))
-	if int64(len(b.buf)) <= b.maxSize {
-		return
+	for _, byt := range p {
+		if b.size < b.maxSize {
+			idx := (b.start + b.size) % b.maxSize
+			b.buf[idx] = byt
+			b.size++
+		} else {
+			b.buf[b.start] = byt
+			b.start = (b.start + 1) % b.maxSize
+			b.beginOffset++
+		}
+		b.currentOffset++
 	}
-	extra := int64(len(b.buf)) - b.maxSize
-	b.buf = append([]byte(nil), b.buf[extra:]...)
-	b.beginOffset += extra
+	if b.size < b.maxSize {
+		b.beginOffset = b.currentOffset - int64(b.size)
+	}
 
 }
 func (b *replBacklog) getCurrentOffset() int64 {

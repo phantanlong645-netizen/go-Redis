@@ -263,13 +263,13 @@ func (h *Handler) sendGetAckToSlaves() {
 		[]byte("*"),
 	})
 	data := getAckcmd.ToBytes()
-	h.masterStatus.mu.Lock()
-	defer h.masterStatus.mu.Unlock()
+	h.masterStatus.mu.RLock()
+	defer h.masterStatus.mu.RUnlock()
 	for slave := range h.masterStatus.onlineSlaves {
 		go func(s *slaveClient) {
 			_, err := s.conn.Write(data)
 			if err != nil {
-				log.Printf("\"Error sending REPLCONF GETACK * to slave %s: %v\", s.conn.RemoteAddr(), err)\n\t\t\t\t// TODO: 考虑将出错的从节点标记为离线，或者进行重试")
+				log.Printf("error sending REPLCONF GETACK to slave: %v", err)
 			}
 		}(slave)
 	}
@@ -467,6 +467,8 @@ func (h *Handler) sendFullResync(slave *slaveClient) error {
 		return err
 	}
 	defer os.RemoveAll(tmpDir)
+	replId := h.getReplID()
+	baseOffset := h.getReplOffset()
 	rdbFile := filepath.Join(tmpDir, "dump.rdb")
 	if err := h.persister.GenerateRDB(rdbFile); err != nil {
 		return err
@@ -475,9 +477,7 @@ func (h *Handler) sendFullResync(slave *slaveClient) error {
 	if err != nil {
 		return err
 	}
-	replId := h.getReplID()
-	currentoffset := h.getReplOffset()
-	if _, err := slave.conn.Write([]byte("+FULLRESYNC " + replId + " " + strconv.FormatInt(currentoffset, 10) + "\r\n")); err != nil {
+	if _, err := slave.conn.Write([]byte("+FULLRESYNC " + replId + " " + strconv.FormatInt(baseOffset, 10) + "\r\n")); err != nil {
 		return err
 	}
 	if _, err := slave.conn.Write([]byte("$" + strconv.Itoa(len(data)) + "\r\n")); err != nil {
@@ -489,7 +489,16 @@ func (h *Handler) sendFullResync(slave *slaveClient) error {
 	if _, err := slave.conn.Write([]byte("\r\n")); err != nil {
 		return err
 	}
-	h.setSlaveOnline(slave, h.getReplOffset())
+	backlogData, latestOffset, ok := h.getBacklogSnapshotAfter(baseOffset)
+	if !ok {
+		return fmt.Errorf("replication backlog overwritten during full resync")
+	}
+	if len(backlogData) > 0 {
+		if _, err := slave.conn.Write(backlogData); err != nil {
+			return err
+		}
+	}
+	h.setSlaveOnline(slave, latestOffset)
 	return nil
 
 }
@@ -617,6 +626,31 @@ func (h *Handler) connectMaster() error {
 	}
 	return nil
 }
+func (h *Handler) reconnectMaster() {
+	for {
+		if !h.isSlaveRole() {
+			return
+		}
+		if h.masterHost == "" || h.masterPort == "" {
+			return
+		}
+		if err := h.connectMaster(); err == nil {
+			return
+		}
+		time.Sleep(time.Second)
+	}
+}
+func (h *Handler) handleMasterLinkDown() {
+	if h.masterConn != nil {
+		_ = h.masterConn.Close()
+		h.masterConn = nil
+	}
+	h.masterChan = nil
+	if h.isSlaveRole() && h.masterHost != "" && h.masterPort != "" {
+		go h.reconnectMaster()
+	}
+
+}
 func (h *Handler) propagateToSlaves(cmdLine [][]byte) {
 	reply := protocol.NewMultiBulkReply(cmdLine)
 	data := reply.ToBytes()
@@ -635,10 +669,12 @@ func (h *Handler) receiveMasterCommands() {
 		select {
 		case payload, ok := <-h.masterChan:
 			if !ok {
+				h.handleMasterLinkDown()
 				return
 			}
 			if payload.Err != nil {
 				if payload.Err == io.EOF || strings.Contains(payload.Err.Error(), "use of closed network connection") {
+					h.handleMasterLinkDown()
 					return
 				}
 				continue
@@ -651,6 +687,7 @@ func (h *Handler) receiveMasterCommands() {
 			_ = h.Exec(h.masterConn, payload.Data)
 		case <-ackTicker.C:
 			if err := h.sendAckToMaster(); err != nil {
+				h.handleMasterLinkDown()
 				return
 			}
 		case <-h.masterCtx.Done():
