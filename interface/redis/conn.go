@@ -13,4 +13,10 @@ type Connection interface {
 	IsSlave() bool
 	SetMaster()
 	IsMaster() bool
+
+	SetMultiState(bool)
+	InMultiState() bool
+	EnqueueCmd([][]byte)
+	GetQueuedCmdLine() [][][]byte
+	ClearQueuedCmds()
 }

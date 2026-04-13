@@ -25,6 +25,27 @@ type IntReply struct {
 type MultiBulkReply struct {
 	Args [][]byte
 }
+type MultiRawReply struct {
+	Replies []Reply
+}
+
+func NewMultiRawReply(replies []Reply) *MultiRawReply {
+	return &MultiRawReply{
+		Replies: replies,
+	}
+}
+
+func (r *MultiRawReply) ToBytes() []byte {
+	res := []byte("*" + strconv.Itoa(len(r.Replies)) + "\r\n")
+	for _, reply := range r.Replies {
+		if reply == nil {
+			res = append(res, []byte("$-1\r\n")...)
+			continue
+		}
+		res = append(res, reply.ToBytes()...)
+	}
+	return res
+}
 
 func (m *MultiBulkReply) ToBytes() []byte {
 	res := []byte("*" + strconv.Itoa(len(m.Args)) + "\r\n")
