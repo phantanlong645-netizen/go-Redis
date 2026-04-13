@@ -14,6 +14,7 @@ import (
 	"go-Redis/redis/parser"
 	"go-Redis/redis/protocol"
 	"io"
+	"log"
 	"net"
 	"os"
 	"path/filepath"
@@ -226,18 +227,52 @@ func (h *Handler) execWait(args [][]byte) protocol.Reply {
 	if acked >= numReplicas {
 		return protocol.NewIntReply(int64(acked))
 	}
+	//等于0 说明永远等待
+	if timeoutMS == 0 {
+		h.sendGetAckToSlaves()
+		for {
+			acked = h.countOnlineSlavesAtOffset(targetOffset)
+			if acked >= numReplicas {
+				return protocol.NewIntReply(int64(acked))
+			}
+			h.sendGetAckToSlaves()
+			time.Sleep(10 * time.Millisecond) // 短暂休眠
+		}
+	}
 	deadline := time.Now().Add(time.Duration(timeoutMS) * time.Millisecond)
+	lastGetAckSent := time.Now()
 	for {
 		acked = h.countOnlineSlavesAtOffset(targetOffset)
 		if acked >= numReplicas {
 			return protocol.NewIntReply(int64(acked))
 		}
-		if time.Now().After(deadline) || timeoutMS == 0 {
+		if time.Now().After(deadline) {
 			return protocol.NewIntReply(int64(acked))
+		}
+		if time.Since(lastGetAckSent) > 50*time.Millisecond {
+			h.sendGetAckToSlaves()
+			lastGetAckSent = time.Now()
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-
+}
+func (h *Handler) sendGetAckToSlaves() {
+	getAckcmd := protocol.NewMultiBulkReply([][]byte{
+		[]byte("REPLCONF"),
+		[]byte("GETACK"),
+		[]byte("*"),
+	})
+	data := getAckcmd.ToBytes()
+	h.masterStatus.mu.Lock()
+	defer h.masterStatus.mu.Unlock()
+	for slave := range h.masterStatus.onlineSlaves {
+		go func(s *slaveClient) {
+			_, err := s.conn.Write(data)
+			if err != nil {
+				log.Printf("\"Error sending REPLCONF GETACK * to slave %s: %v\", s.conn.RemoteAddr(), err)\n\t\t\t\t// TODO: 考虑将出错的从节点标记为离线，或者进行重试")
+			}
+		}(slave)
+	}
 }
 func (h *Handler) execPSync(c redis.Connection, args [][]byte) protocol.Reply {
 	if len(args) != 2 {
@@ -300,6 +335,19 @@ func (h *Handler) execReplConf(c redis.Connection, args [][]byte) protocol.Reply
 		}
 		slave.offset = offset
 		slave.lastAckTime = time.Now()
+		return &protocol.NoReply{}
+	case "GETACK":
+		currentOffset := h.getSlaveReplOffset()
+		ackCmd := protocol.NewMultiBulkReply([][]byte{
+			[]byte("REPLCONF"),
+			[]byte("ACK"),
+			[]byte(strconv.FormatInt(currentOffset, 10)),
+		})
+		_, err := c.Write(ackCmd.ToBytes())
+		if err != nil {
+			log.Printf("Slave error sending REPLCONF ACK to master: %v", err)
+			// TODO: 考虑错误处理，例如关闭连接
+		}
 		return &protocol.NoReply{}
 
 	default:
@@ -580,6 +628,9 @@ func (h *Handler) propagateToSlaves(cmdLine [][]byte) {
 	}
 }
 func (h *Handler) receiveMasterCommands() {
+	ackTicker := time.NewTicker(time.Second)
+	defer ackTicker.Stop()
+
 	for {
 		select {
 		case payload, ok := <-h.masterChan:
@@ -587,7 +638,10 @@ func (h *Handler) receiveMasterCommands() {
 				return
 			}
 			if payload.Err != nil {
-				return
+				if payload.Err == io.EOF || strings.Contains(payload.Err.Error(), "use of closed network connection") {
+					return
+				}
+				continue
 			}
 			if len(payload.Data) == 0 {
 				continue
@@ -595,7 +649,10 @@ func (h *Handler) receiveMasterCommands() {
 			reply := protocol.NewMultiBulkReply(payload.Data)
 			h.addSlaveReplOffset(int64(len(reply.ToBytes())))
 			_ = h.Exec(h.masterConn, payload.Data)
-			_ = h.sendAckToMaster()
+		case <-ackTicker.C:
+			if err := h.sendAckToMaster(); err != nil {
+				return
+			}
 		case <-h.masterCtx.Done():
 			return
 		}
