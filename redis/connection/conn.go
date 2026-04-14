@@ -1,6 +1,7 @@
 package connection
 
 import (
+	"go-Redis/redis/protocol"
 	"net"
 	"sync"
 )
@@ -18,6 +19,7 @@ type Connection struct {
 	queue      [][][]byte
 	mu         sync.Mutex
 	flags      uint64
+	txErrors   []protocol.Reply
 }
 
 func NewConn(conn net.Conn) *Connection {
@@ -85,6 +87,8 @@ func (c *Connection) SetMultiState(state bool) {
 		return
 	}
 	c.flags &^= flagMulti
+	c.queue = nil
+	c.txErrors = nil
 }
 func (c *Connection) InMultiState() bool {
 	return c.flags&flagMulti > 0
@@ -116,4 +120,20 @@ func (c *Connection) ClearQueuedCmds() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.queue = c.queue[:0]
+}
+func (c *Connection) AddTxError(reply protocol.Reply) {
+	if reply == nil {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.txErrors = append(c.txErrors, reply)
+
+}
+func (c *Connection) GetTxErrors() []protocol.Reply {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	res := make([]protocol.Reply, len(c.txErrors))
+	copy(res, c.txErrors)
+	return res
 }

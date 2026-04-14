@@ -15,12 +15,12 @@ func (db *DB) Exec(cmdLine [][]byte) protocol.Reply {
 	if !ok {
 		return protocol.NewErrReply("ERR unknown command")
 	}
-	if cmdObj.arity >= 0 {
-		if cmdObj.arity != len(args) {
+	if cmdObj.Arity >= 0 {
+		if cmdObj.Arity != len(args) {
 			return protocol.NewErrReply("ERR wrong number of arguments for " + cmd)
 		}
 	} else {
-		if len(args) < -cmdObj.arity {
+		if len(args) < -cmdObj.Arity {
 			return protocol.NewErrReply("ERR wrong number of arguments for " + cmd)
 		}
 	}

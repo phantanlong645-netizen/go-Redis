@@ -38,7 +38,7 @@ func newReplBacklog(maxSize int) *replBacklog {
 		maxSize = 1
 	}
 	return &replBacklog{
-		buf:           make([]byte, 0, maxSize),
+		buf:           make([]byte, maxSize),
 		beginOffset:   0,
 		currentOffset: 0,
 		maxSize:       maxSize,
@@ -128,15 +128,25 @@ func (b *replBacklog) isValidOffset(offset int64) bool {
 	return offset >= b.beginOffset && offset <= b.currentOffset
 }
 func (b *replBacklog) snapshot() ([]byte, int64, int64) {
-	data := append([]byte(nil), b.buf...)
+	data := make([]byte, b.size)
+	for i := 0; i < b.size; i++ {
+		data[i] = b.buf[(b.start+i)%b.maxSize]
+	}
 	return data, b.beginOffset, b.currentOffset
 }
 func (b *replBacklog) snapshotAfter(offset int64) ([]byte, int64, bool) {
 	if !b.isValidOffset(offset) {
 		return nil, 0, false
 	}
-	start := offset - b.beginOffset
-	data := append([]byte(nil), b.buf[start:]...)
+	start := int(offset - b.beginOffset)
+	dataLen := b.size - start
+	if dataLen < 0 {
+		return nil, 0, false
+	}
+	data := make([]byte, dataLen)
+	for i := 0; i < dataLen; i++ {
+		data[i] = b.buf[(b.start+start+i)%b.maxSize]
+	}
 	return data, b.currentOffset, true
 
 }

@@ -6,7 +6,7 @@ type ExecFunc func(db *DB, cmdLine [][]byte) protocol.Reply
 
 type Command struct {
 	executor ExecFunc
-	arity    int
+	Arity    int
 }
 
 var Router = map[string]*Command{

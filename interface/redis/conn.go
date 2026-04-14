@@ -1,5 +1,7 @@
 package redis
 
+import "go-Redis/redis/protocol"
+
 type Connection interface {
 	Write([]byte) (int, error)
 	Close() error
@@ -19,4 +21,7 @@ type Connection interface {
 	EnqueueCmd([][]byte)
 	GetQueuedCmdLine() [][][]byte
 	ClearQueuedCmds()
+
+	AddTxError(reply protocol.Reply)
+	GetTxErrors() []protocol.Reply
 }
