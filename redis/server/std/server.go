@@ -122,7 +122,6 @@ func (h *Handler) Close() {
 		_ = h.persister.Close()
 	}
 }
-
 func isWriteCommand(cmd string) bool {
 	switch cmd {
 	case "SET", "MSET", "DEL",
@@ -165,6 +164,10 @@ func (h *Handler) Exec(c redis.Connection, cmdLine [][]byte) protocol.Reply {
 		return protocol.NewErrReply("ERR empty command")
 	}
 	cmd := strings.ToUpper(string(cmdLine[0]))
+	if c.InMultiState() && cmd != "MULTI" && cmd != "DISCARD" && cmd != "EXEC" {
+		c.EnqueueCmd(cmdLine)
+		return protocol.NewStatusReply("QUEUED")
+	}
 
 	switch cmd {
 	case "SELECT":
@@ -189,8 +192,14 @@ func (h *Handler) Exec(c redis.Connection, cmdLine [][]byte) protocol.Reply {
 		return h.execPSync(c, cmdLine[1:])
 	case "WAIT":
 		return h.execWait(cmdLine[1:])
-
+	case "MULTI":
+		return h.execMulti(c)
+	case "DISCARD":
+		return h.execDiscard(c)
+	case "EXEC":
+		return h.execExec(c)
 	}
+
 	if h.isSlaveRole() && isWriteCommand(cmd) && !c.IsMaster() {
 		return protocol.NewErrReply("READONLY You can't write against a read only slave.")
 	}
@@ -209,6 +218,38 @@ func (h *Handler) Exec(c redis.Connection, cmdLine [][]byte) protocol.Reply {
 
 	}
 	return reply
+}
+func (h *Handler) execMulti(c redis.Connection) protocol.Reply {
+	if c.InMultiState() {
+		return protocol.NewErrReply("ERR MULTI calls can not be nested")
+	}
+	c.SetMultiState(true)
+	c.ClearQueuedCmds()
+	return protocol.NewStatusReply("OK")
+}
+func (h *Handler) execDiscard(c redis.Connection) protocol.Reply {
+	if !c.InMultiState() {
+		return protocol.NewErrReply("ERR DISCARD without MULTI")
+	}
+	c.ClearQueuedCmds()
+	c.SetMultiState(false)
+	return protocol.NewStatusReply("OK")
+
+}
+func (h *Handler) execExec(c redis.Connection) protocol.Reply {
+	if !c.InMultiState() {
+		return protocol.NewErrReply("ERR Exec without MULTI")
+	}
+	queued := c.GetQueuedCmdLine()
+	c.ClearQueuedCmds()
+	c.SetMultiState(false)
+	replies := make([]protocol.Reply, 0, len(queued))
+	for _, cmdLine := range queued {
+		reply := h.Exec(c, cmdLine)
+		replies = append(replies, reply)
+	}
+	return protocol.NewMultiRawReply(replies)
+
 }
 func (h *Handler) execWait(args [][]byte) protocol.Reply {
 	if len(args) != 2 {
