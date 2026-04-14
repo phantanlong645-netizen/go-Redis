@@ -13,6 +13,7 @@ type DBSet struct {
 type DB struct {
 	Data map[string]*DataEntity
 	TTL  map[string]time.Time
+	Ver  map[string]uint32
 	Mu   sync.RWMutex
 }
 type DataEntity struct {
@@ -24,6 +25,7 @@ func NewDB() *DB {
 	return &DB{
 		Data: make(map[string]*DataEntity),
 		TTL:  make(map[string]time.Time),
+		Ver:  make(map[string]uint32),
 	}
 }
 func NewDBSet() *DBSet {
@@ -40,4 +42,19 @@ func (d *DBSet) GetDB(index int) *DB {
 		return nil
 	}
 	return d.dbs[index]
+}
+func (db *DB) GetVersion(key string) uint32 {
+	db.Mu.RLock()
+	defer db.Mu.RUnlock()
+	return db.Ver[key]
+}
+func (db *DB) AddVersion(keys ...string) {
+	if len(keys) == 0 {
+		return
+	}
+	db.Mu.Lock()
+	defer db.Mu.Unlock()
+	for _, key := range keys {
+		db.Ver[key]++
+	}
 }
