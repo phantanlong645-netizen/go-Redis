@@ -56,10 +56,16 @@ func (h *Handler) execWatch(c redis.Connection, cmdLine [][]byte) protocol.Reply
 	if db == nil {
 		return protocol.NewErrReply("ERR no such database")
 	}
+	dbIndex := c.GetDBIndex()
 	watching := c.GetWatching()
+	dbwatching, ok := watching[dbIndex]
+	if !ok {
+		dbwatching = make(map[string]uint32)
+		watching[dbIndex] = dbwatching
+	}
 	for _, arg := range cmdLine[1:] {
 		key := string(arg)
-		watching[key] = db.GetVersion(key)
+		watching[dbIndex][key] = db.GetVersion(key)
 	}
 	return protocol.NewStatusReply("OK")
 
@@ -107,14 +113,16 @@ func (h *Handler) enqueueCmdInMulti(c redis.Connection, cmdLine [][]byte) protoc
 
 }
 func (h *Handler) isWatchingChanged(c redis.Connection) bool {
-	db := h.dbSet.GetDB(c.GetDBIndex())
-	if db == nil {
-		return false
-	}
 	watching := c.GetWatching()
-	for key, ver := range watching {
-		if ver != db.GetVersion(key) {
+	for dbIndex, keyMap := range watching {
+		db := h.dbSet.GetDB(dbIndex)
+		if db == nil {
 			return true
+		}
+		for key, ver := range keyMap {
+			if db.GetVersion(key) != ver {
+				return true
+			}
 		}
 	}
 	return false

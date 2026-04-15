@@ -20,7 +20,7 @@ type Connection struct {
 	mu         sync.Mutex
 	flags      uint64
 	txErrors   []protocol.Reply
-	watching   map[string]uint32
+	watching   map[int]map[string]uint32
 }
 
 func NewConn(conn net.Conn) *Connection {
@@ -139,11 +139,11 @@ func (c *Connection) GetTxErrors() []protocol.Reply {
 	copy(res, c.txErrors)
 	return res
 }
-func (c *Connection) GetWatching() map[string]uint32 {
+func (c *Connection) GetWatching() map[int]map[string]uint32 {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.watching == nil {
-		c.watching = make(map[string]uint32)
+		c.watching = make(map[int]map[string]uint32)
 	}
 	return c.watching
 }
