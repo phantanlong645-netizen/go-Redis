@@ -20,6 +20,7 @@ func execHset(db *DB, cmdLine [][]byte) protocol.Reply {
 			Data: hash,
 		}
 		delete(db.TTL, key)
+		db.AddVersion(key)
 		return protocol.NewIntReply(1)
 	}
 	//这里是看value的map是否存在，但是不清楚这个map对应的key是否存在  所以下面需要_, ok = hash[field]去判断一下
@@ -102,6 +103,9 @@ func execHdel(db *DB, cmdLine [][]byte) protocol.Reply {
 			delete(hash, field)
 			deleted++
 		}
+	}
+	if deleted == 0 {
+		return protocol.NewIntReply(0)
 	}
 	if len(hash) == 0 {
 		delete(db.Data, key)

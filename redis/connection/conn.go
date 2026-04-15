@@ -20,6 +20,7 @@ type Connection struct {
 	mu         sync.Mutex
 	flags      uint64
 	txErrors   []protocol.Reply
+	watching   map[string]uint32
 }
 
 func NewConn(conn net.Conn) *Connection {
@@ -89,6 +90,7 @@ func (c *Connection) SetMultiState(state bool) {
 	c.flags &^= flagMulti
 	c.queue = nil
 	c.txErrors = nil
+	c.watching = nil
 }
 func (c *Connection) InMultiState() bool {
 	return c.flags&flagMulti > 0
@@ -136,4 +138,17 @@ func (c *Connection) GetTxErrors() []protocol.Reply {
 	res := make([]protocol.Reply, len(c.txErrors))
 	copy(res, c.txErrors)
 	return res
+}
+func (c *Connection) GetWatching() map[string]uint32 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.watching == nil {
+		c.watching = make(map[string]uint32)
+	}
+	return c.watching
+}
+func (c *Connection) ClearWatching() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.watching = nil
 }

@@ -21,6 +21,8 @@ type Connection interface {
 	EnqueueCmd([][]byte)
 	GetQueuedCmdLine() [][][]byte
 	ClearQueuedCmds()
+	GetWatching() map[string]uint32
+	ClearWatching()
 
 	AddTxError(reply protocol.Reply)
 	GetTxErrors() []protocol.Reply

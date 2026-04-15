@@ -33,6 +33,7 @@ func execLPush(db *DB, cmdLine [][]byte) protocol.Reply {
 		list = append([][]byte{cmdLine[i]}, list...)
 	}
 	entity.Data = list
+	db.AddVersion(key)
 	return protocol.NewIntReply(int64(len(list)))
 }
 func execLPop(db *DB, cmdLine [][]byte) protocol.Reply {
@@ -139,5 +140,6 @@ func execRPush(db *DB, cmdLine [][]byte) protocol.Reply {
 		list = append(list, cmdLine[i])
 	}
 	entity.Data = list
+	db.AddVersion(key)
 	return protocol.NewIntReply(int64(len(list)))
 }

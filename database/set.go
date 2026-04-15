@@ -41,6 +41,9 @@ func execSAdd(db *DB, cmdLine [][]byte) protocol.Reply {
 			added++
 		}
 	}
+	if added > 0 {
+		db.AddVersion(key)
+	}
 	return protocol.NewIntReply(added)
 }
 func execSRem(db *DB, cmdLine [][]byte) protocol.Reply {
@@ -65,13 +68,16 @@ func execSRem(db *DB, cmdLine [][]byte) protocol.Reply {
 	for _, arg := range cmdLine[1:] {
 		member := string(arg)
 		if _, exist := set[member]; exist {
-			delete(db.Data, key)
+			delete(set, member)
 			deleted++
 		}
 	}
+	if deleted == 0 {
+		return protocol.NewIntReply(0)
+	}
 	if len(set) == 0 {
 		delete(db.TTL, key)
-		delete(set, key)
+		delete(db.Data, key)
 	}
 	db.AddVersion(key)
 	return protocol.NewIntReply(deleted)

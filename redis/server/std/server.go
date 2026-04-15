@@ -197,6 +197,11 @@ func (h *Handler) Exec(c redis.Connection, cmdLine [][]byte) protocol.Reply {
 		return h.execDiscard(c)
 	case "EXEC":
 		return h.execExec(c)
+	case "WATCH":
+		return h.execWatch(c, cmdLine)
+	case "UNWATCH":
+		return h.execUnWatch(c, cmdLine)
+
 	}
 
 	if h.isSlaveRole() && isWriteCommand(cmd) && !c.IsMaster() {

@@ -33,8 +33,13 @@ func execZAdd(db *DB, cmdLine [][]byte) protocol.Reply {
 	if !ok {
 		return protocol.NewErrReply("ERR wrong type")
 	}
-	_, exist := set[member]
+	oldscore, exist := set[member]
+	if exist && oldscore == score {
+		return protocol.NewIntReply(0)
+	}
+
 	set[member] = score
+	db.AddVersion(key)
 	if exist {
 		return protocol.NewIntReply(0)
 	} else {
