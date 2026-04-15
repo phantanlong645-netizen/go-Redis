@@ -19,6 +19,7 @@ func execLPush(db *DB, cmdLine [][]byte) protocol.Reply {
 			Data: list,
 		}
 		delete(db.TTL, key)
+		db.AddVersion(key)
 		return protocol.NewIntReply(int64(len(list)))
 	}
 	if entity.Type != "list" {
@@ -61,6 +62,7 @@ func execLPop(db *DB, cmdLine [][]byte) protocol.Reply {
 	} else {
 		entity.Data = list
 	}
+	db.AddVersion(key)
 	return protocol.NewBulkReply(value)
 }
 func execLRange(db *DB, cmdLine [][]byte) protocol.Reply {
@@ -123,6 +125,7 @@ func execRPush(db *DB, cmdLine [][]byte) protocol.Reply {
 			Data: list,
 		}
 		delete(db.TTL, key)
+		db.AddVersion(key)
 		return protocol.NewIntReply(int64(len(list)))
 	}
 	if entity.Type != "list" {

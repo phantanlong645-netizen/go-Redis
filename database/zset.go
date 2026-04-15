@@ -23,6 +23,7 @@ func execZAdd(db *DB, cmdLine [][]byte) protocol.Reply {
 			},
 		}
 		delete(db.TTL, key)
+		db.AddVersion(key)
 		return protocol.NewIntReply(1)
 	}
 	if entity.Type != "zset" {

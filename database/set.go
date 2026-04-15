@@ -23,6 +23,7 @@ func execSAdd(db *DB, cmdLine [][]byte) protocol.Reply {
 			Data: set,
 		}
 		delete(db.TTL, key)
+		db.AddVersion(key)
 		return protocol.NewIntReply(added)
 	}
 	if entity.Type != "set" {
@@ -72,6 +73,7 @@ func execSRem(db *DB, cmdLine [][]byte) protocol.Reply {
 		delete(db.TTL, key)
 		delete(set, key)
 	}
+	db.AddVersion(key)
 	return protocol.NewIntReply(deleted)
 }
 func execSIsmember(db *DB, cmdLine [][]byte) protocol.Reply {

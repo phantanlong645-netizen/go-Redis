@@ -28,6 +28,7 @@ func execHset(db *DB, cmdLine [][]byte) protocol.Reply {
 		return protocol.NewErrReply("ERR wrong type")
 	}
 	_, ok = hash[field]
+	db.AddVersion(key)
 	hash[field] = value
 	if ok {
 		return protocol.NewIntReply(0)
@@ -106,5 +107,6 @@ func execHdel(db *DB, cmdLine [][]byte) protocol.Reply {
 		delete(db.Data, key)
 		delete(db.TTL, key)
 	}
+	db.AddVersion(key)
 	return protocol.NewIntReply(deleted)
 }
