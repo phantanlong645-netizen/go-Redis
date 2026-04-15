@@ -70,7 +70,7 @@ func execSRem(db *DB, cmdLine [][]byte) protocol.Reply {
 	}
 	if len(set) == 0 {
 		delete(db.TTL, key)
-		delete(db.Data, key)
+		delete(set, key)
 	}
 	return protocol.NewIntReply(deleted)
 }

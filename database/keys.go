@@ -11,6 +11,7 @@ func execPing(db *DB, cmdLine [][]byte) protocol.Reply {
 }
 func execDel(db *DB, cmdLine [][]byte) protocol.Reply {
 	var deleteCount int64
+	changed := make([]string, 0, len(cmdLine))
 	for _, arg := range cmdLine {
 		key := string(arg)
 		if db.IsExpired(key) {
@@ -20,7 +21,12 @@ func execDel(db *DB, cmdLine [][]byte) protocol.Reply {
 			delete(db.Data, key)
 			delete(db.TTL, key)
 			deleteCount++
+			changed = append(changed, key)
 		}
+
+	}
+	if len(changed) > 0 {
+		db.AddVersion(changed...)
 	}
 	return protocol.NewIntReply(deleteCount)
 }
@@ -87,6 +93,7 @@ func execExpire(db *DB, cmdLine [][]byte) protocol.Reply {
 		return protocol.NewErrReply("ERR invalid expire time")
 	}
 	db.TTL[key] = time.Now().Add(time.Duration(seconds) * time.Second)
+	db.AddVersion(key)
 	return protocol.NewIntReply(1)
 }
 func execPExpireAt(db *DB, cmdLine [][]byte) protocol.Reply {
@@ -102,6 +109,7 @@ func execPExpireAt(db *DB, cmdLine [][]byte) protocol.Reply {
 		return protocol.NewErrReply("ERR invalid expire time")
 	}
 	db.TTL[key] = time.UnixMilli(millis)
+	db.AddVersion(key)
 	return protocol.NewIntReply(1)
 
 }
@@ -137,6 +145,7 @@ func execPersist(db *DB, cmdLine [][]byte) protocol.Reply {
 		return protocol.NewIntReply(0)
 	}
 	delete(db.TTL, key)
+	db.AddVersion(key)
 	return protocol.NewIntReply(1)
 }
 func execDBSize(db *DB, cmdLine [][]byte) protocol.Reply {

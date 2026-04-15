@@ -21,11 +21,13 @@ func execGet(db *DB, cmdLine [][]byte) protocol.Reply {
 	return protocol.NewBulkReply(value)
 }
 func execSet(db *DB, cmdLine [][]byte) protocol.Reply {
-	db.Data[string(cmdLine[0])] = &DataEntity{
+	key := string(cmdLine[0])
+	db.Data[key] = &DataEntity{
 		Data: cmdLine[1],
 		Type: "string",
 	}
-	delete(db.TTL, string(cmdLine[0]))
+	delete(db.TTL, key)
+	db.AddVersion(key)
 	return protocol.NewStatusReply("OK")
 }
 func execMGET(db *DB, cmdLine [][]byte) protocol.Reply {
@@ -54,6 +56,7 @@ func execMSET(db *DB, cmdLine [][]byte) protocol.Reply {
 	if len(cmdLine)%2 != 0 {
 		return protocol.NewErrReply("ERR wrong number of arguments for MSET")
 	}
+	keys := make([]string, 0, len(cmdLine)/2)
 	for i := 0; i < len(cmdLine); i = i + 2 {
 		key := cmdLine[i]
 		value := cmdLine[i+1]
@@ -62,7 +65,9 @@ func execMSET(db *DB, cmdLine [][]byte) protocol.Reply {
 			Type: "string",
 		}
 		delete(db.TTL, string(key))
+		keys = append(keys, string(key))
 	}
+	db.AddVersion(keys...)
 	return protocol.NewStatusReply("OK")
 }
 func execIncr(db *DB, cmdLine [][]byte) protocol.Reply {
@@ -73,6 +78,7 @@ func execIncr(db *DB, cmdLine [][]byte) protocol.Reply {
 			Data: []byte("1"),
 		}
 		delete(db.TTL, key)
+		db.AddVersion(key)
 		return protocol.NewIntReply(1)
 	}
 	entity, ok := db.Data[key]
@@ -82,6 +88,7 @@ func execIncr(db *DB, cmdLine [][]byte) protocol.Reply {
 			Data: []byte("1"),
 		}
 		delete(db.TTL, key)
+		db.AddVersion(key)
 		return protocol.NewIntReply(1)
 	}
 	if entity.Type != "string" {
@@ -96,6 +103,7 @@ func execIncr(db *DB, cmdLine [][]byte) protocol.Reply {
 		return protocol.NewErrReply("ERR value is not an integer")
 	}
 	num++
+	db.AddVersion(key)
 	entity.Data = []byte(strconv.FormatInt(num, 10))
 	return protocol.NewIntReply(num)
 
@@ -108,6 +116,7 @@ func execDecr(db *DB, cmdLine [][]byte) protocol.Reply {
 			Data: []byte("-1"),
 		}
 		delete(db.TTL, key)
+		db.AddVersion(key)
 		return protocol.NewIntReply(-1)
 	}
 	entity, ok := db.Data[key]
@@ -117,6 +126,7 @@ func execDecr(db *DB, cmdLine [][]byte) protocol.Reply {
 			Data: []byte("-1"),
 		}
 		delete(db.TTL, key)
+		db.AddVersion(key)
 		return protocol.NewIntReply(-1)
 	}
 	if entity.Type != "string" {
@@ -131,6 +141,7 @@ func execDecr(db *DB, cmdLine [][]byte) protocol.Reply {
 		return protocol.NewErrReply("ERR value is not an integer")
 	}
 	num--
+	db.AddVersion(key)
 	entity.Data = []byte(strconv.FormatInt(num, 10))
 	return protocol.NewIntReply(num)
 }
