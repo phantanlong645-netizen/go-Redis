@@ -33,7 +33,7 @@ func (h *Handler) execExec(c redis.Connection) protocol.Reply {
 	}
 	if h.isWatchingChanged(c) {
 		c.SetMultiState(false)
-		return protocol.NewMultiBulkReply([][]byte{})
+		return protocol.NewNullMultiBulkReply()
 	}
 	queued := c.GetQueuedCmdLine()
 	c.SetMultiState(false)

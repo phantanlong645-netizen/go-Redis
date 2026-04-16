@@ -26,3 +26,25 @@ func (db *DB) Exec(cmdLine [][]byte) protocol.Reply {
 	}
 	return cmdObj.executor(db, args)
 }
+func (db *DB) GetUndoLogs(cmdLine [][]byte) [][][]byte {
+	if len(cmdLine) == 0 {
+		return nil
+	}
+	cmd := strings.ToUpper(string(cmdLine[0]))
+	args := cmdLine[1:]
+	cmdObj, ok := Router[cmd]
+	if !ok || cmdObj.undo == nil {
+		return nil
+	}
+	if cmdObj.Arity >= 0 {
+		if cmdObj.Arity != len(args) {
+			return nil
+		}
+	} else {
+		if len(args) < -cmdObj.Arity {
+			return nil
+		}
+	}
+	return cmdObj.undo(db, args)
+
+}

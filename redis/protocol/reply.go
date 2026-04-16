@@ -22,11 +22,20 @@ type NullBulkReply struct {
 type IntReply struct {
 	Code int64
 }
+type NullMultiBulkReply struct {
+}
 type MultiBulkReply struct {
 	Args [][]byte
 }
 type MultiRawReply struct {
 	Replies []Reply
+}
+
+func NewNullMultiBulkReply() *NullMultiBulkReply {
+	return &NullMultiBulkReply{}
+}
+func (r *NullMultiBulkReply) ToBytes() []byte {
+	return []byte("*-1\r\n")
 }
 
 func NewMultiRawReply(replies []Reply) *MultiRawReply {

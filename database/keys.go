@@ -76,6 +76,7 @@ func (db *DB) IsExpired(key string) bool {
 	if time.Now().After(deadLine) {
 		delete(db.TTL, key)
 		delete(db.Data, key)
+		db.AddVersion(key)
 		return true
 	}
 	return false
@@ -129,6 +130,7 @@ func execTTL(db *DB, cmdLine [][]byte) protocol.Reply {
 	if ttl < 0 {
 		delete(db.TTL, key)
 		delete(db.Data, key)
+		db.AddVersion(key)
 		return protocol.NewIntReply(-2)
 	}
 	return protocol.NewIntReply(ttl)
