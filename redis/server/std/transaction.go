@@ -36,15 +36,37 @@ func (h *Handler) execExec(c redis.Connection) protocol.Reply {
 		return protocol.NewNullMultiBulkReply()
 	}
 	queued := c.GetQueuedCmdLine()
+	db := h.dbSet.GetDB(c.GetDBIndex())
+	if db == nil {
+		c.SetMultiState(false)
+		return protocol.NewErrReply("ERR no such database")
+	}
+	undoLogs := make([][][][]byte, 0, len(queued))
+
 	c.SetMultiState(false)
 	replies := make([]protocol.Reply, 0, len(queued))
-	for _, cmdLine := range queued {
+	for i, cmdLine := range queued {
+		undolog := db.GetUndoLogs(cmdLine)
 		reply := h.Exec(c, cmdLine)
 		replies = append(replies, reply)
+		if isErrorReply(reply) {
+			h.rollback(db, undoLogs[:i])
+			break
+		}
+		undoLogs = append(undoLogs, undolog)
 	}
 	return protocol.NewMultiRawReply(replies)
 
 }
+func (h *Handler) rollback(db *database.DB, undoLogs [][][][]byte) {
+	for i := len(undoLogs) - 1; i >= 0; i-- {
+		logs := undoLogs[i]
+		for j := len(logs) - 1; j >= 0; j-- {
+			db.Exec(logs[j])
+		}
+	}
+}
+
 func (h *Handler) execWatch(c redis.Connection, cmdLine [][]byte) protocol.Reply {
 	if len(cmdLine) < 2 {
 		return protocol.NewErrReply("ERR wrong number of arguments for WATCH")

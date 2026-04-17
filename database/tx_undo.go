@@ -30,23 +30,28 @@ func undoMSet(db *DB, cmdLine [][]byte) [][][]byte {
 }
 
 func undoExpire(db *DB, cmdLine [][]byte) [][][]byte {
-	return nil
+	key := string(cmdLine[0])
+	return undoForkey(db, key)
 }
 
 func undoPersist(db *DB, cmdLine [][]byte) [][][]byte {
-	return nil
+	key := string(cmdLine[0])
+	return undoForkey(db, key)
 }
 
 func undoIncr(db *DB, cmdLine [][]byte) [][][]byte {
-	return nil
+	key := string(cmdLine[0])
+	return undoForkey(db, key)
 }
 
 func undoDecr(db *DB, cmdLine [][]byte) [][][]byte {
-	return nil
+	key := string(cmdLine[0])
+	return undoForkey(db, key)
 }
 
 func undoPExpireAt(db *DB, cmdLine [][]byte) [][][]byte {
-	return nil
+	key := string(cmdLine[0])
+	return undoForkey(db, key)
 }
 func undoForkey(db *DB, key string) [][][]byte {
 	entity, expireAt, ok := getUndoSnapshot(db, key)
