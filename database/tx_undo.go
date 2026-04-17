@@ -53,6 +53,46 @@ func undoPExpireAt(db *DB, cmdLine [][]byte) [][][]byte {
 	key := string(cmdLine[0])
 	return undoForkey(db, key)
 }
+func undoHSet(db *DB, cmdLine [][]byte) [][][]byte {
+	key := string(cmdLine[0])
+	return undoForkey(db, key)
+}
+
+func undoHDel(db *DB, cmdLine [][]byte) [][][]byte {
+	key := string(cmdLine[0])
+	return undoForkey(db, key)
+}
+
+func undoLPush(db *DB, cmdLine [][]byte) [][][]byte {
+	key := string(cmdLine[0])
+	return undoForkey(db, key)
+}
+
+func undoLPop(db *DB, cmdLine [][]byte) [][][]byte {
+	key := string(cmdLine[0])
+	return undoForkey(db, key)
+}
+
+func undoRPush(db *DB, cmdLine [][]byte) [][][]byte {
+	key := string(cmdLine[0])
+	return undoForkey(db, key)
+}
+
+func undoSAdd(db *DB, cmdLine [][]byte) [][][]byte {
+	key := string(cmdLine[0])
+	return undoForkey(db, key)
+}
+
+func undoSRem(db *DB, cmdLine [][]byte) [][][]byte {
+	key := string(cmdLine[0])
+	return undoForkey(db, key)
+}
+
+func undoZAdd(db *DB, cmdLine [][]byte) [][][]byte {
+	key := string(cmdLine[0])
+	return undoForkey(db, key)
+}
+
 func undoForkey(db *DB, key string) [][][]byte {
 	entity, expireAt, ok := getUndoSnapshot(db, key)
 	if !ok {
