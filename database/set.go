@@ -1,6 +1,7 @@
 package database
 
 import (
+	"go-Redis/datastruct/set"
 	"go-Redis/redis/protocol"
 )
 
@@ -9,12 +10,12 @@ func execSAdd(db *DB, cmdLine [][]byte) protocol.Reply {
 	db.IsExpired(key)
 	entity, ok := db.Data[key]
 	if !ok {
-		set := make(map[string]struct{})
+		set := set.Make()
 		var added int64
 		for _, arg := range cmdLine[1:] {
 			member := string(arg)
-			if _, exist := set[member]; !exist {
-				set[member] = struct{}{}
+			result := set.Add(member)
+			if result == 1 {
 				added++
 			}
 		}
@@ -29,15 +30,15 @@ func execSAdd(db *DB, cmdLine [][]byte) protocol.Reply {
 	if entity.Type != "set" {
 		return protocol.NewErrReply("ERR wrong type")
 	}
-	set, ok := entity.Data.(map[string]struct{})
+	set, ok := entity.Data.(*set.Set)
 	if !ok {
 		return protocol.NewErrReply("ERR wrong type")
 	}
 	var added int64
 	for _, arg := range cmdLine[1:] {
 		member := string(arg)
-		if _, exist := set[member]; !exist {
-			set[member] = struct{}{}
+		result := set.Add(member)
+		if result == 1 {
 			added++
 		}
 	}
@@ -60,22 +61,19 @@ func execSRem(db *DB, cmdLine [][]byte) protocol.Reply {
 		return protocol.NewErrReply("ERR wrong type")
 	}
 
-	set, ok := entity.Data.(map[string]struct{})
+	set, ok := entity.Data.(*set.Set)
 	if !ok {
 		return protocol.NewErrReply("ERR wrong type")
 	}
 	var deleted int64
 	for _, arg := range cmdLine[1:] {
 		member := string(arg)
-		if _, exist := set[member]; exist {
-			delete(set, member)
-			deleted++
-		}
+		deleted += int64(set.Remove(member))
 	}
 	if deleted == 0 {
 		return protocol.NewIntReply(0)
 	}
-	if len(set) == 0 {
+	if set.Len() == 0 {
 		delete(db.TTL, key)
 		delete(db.Data, key)
 	}
@@ -99,12 +97,12 @@ func execSIsmember(db *DB, cmdLine [][]byte) protocol.Reply {
 		return protocol.NewErrReply("ERR wrong type")
 	}
 
-	set, ok := entity.Data.(map[string]struct{})
+	set2, ok := entity.Data.(*set.Set)
 	if !ok {
 		return protocol.NewErrReply("ERR wrong type")
 	}
 
-	if _, exists := set[member]; exists {
+	if exists := set2.Has(member); exists {
 		return protocol.NewIntReply(1)
 	}
 	return protocol.NewIntReply(0)

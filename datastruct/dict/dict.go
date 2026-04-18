@@ -11,6 +11,7 @@ type Dict interface {
 	Remove(key string) (val any, result int)
 	PutIfAbsent(key string, val any) int
 	PutIfExists(key string, val any) int
+	Len() int
 }
 type shard struct {
 	m     map[string]any
