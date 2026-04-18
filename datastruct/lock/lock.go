@@ -60,3 +60,59 @@ func (lock *Locks) toLockIndices(keys []string) []uint32 {
 	})
 	return indices
 }
+func (lock *Locks) RLock(key string) {
+	index := lock.spread(key)
+	lock.table[index].RLock()
+}
+func (lock *Locks) RUnlock(key string) {
+	index := lock.spread(key)
+	lock.table[index].RUnlock()
+}
+func (locks *Locks) RLocks(keys ...string) {
+	indices := locks.toLockIndices(keys)
+	for _, index := range indices {
+		locks.table[index].RLock()
+	}
+}
+func (locks *Locks) RUnLocks(keys ...string) {
+	indices := locks.toLockIndices(keys)
+	for i := len(indices) - 1; i >= 0; i-- {
+		locks.table[indices[i]].RUnlock()
+	}
+}
+func (lock *Locks) RWLocks(writeKeys []string, readKeys []string) {
+	keys := append(writeKeys, readKeys...)
+	indices := lock.toLockIndices(keys)
+	writeIndexSet := make(map[uint32]struct{})
+	for _, key := range writeKeys {
+		index := lock.spread(key)
+		writeIndexSet[index] = struct{}{}
+	}
+	for _, index := range indices {
+		if _, ok := writeIndexSet[index]; ok {
+			lock.table[index].Lock()
+		} else {
+			lock.table[index].RLock()
+		}
+	}
+
+}
+func (locks *Locks) RWUnLocks(writeKeys []string, readKeys []string) {
+	keys := append(writeKeys, readKeys...)
+	indices := locks.toLockIndices(keys)
+
+	writeIndexSet := make(map[uint32]struct{})
+	for _, key := range writeKeys {
+		index := locks.spread(key)
+		writeIndexSet[index] = struct{}{}
+	}
+
+	for i := len(indices) - 1; i >= 0; i-- {
+		index := indices[i]
+		if _, ok := writeIndexSet[index]; ok {
+			locks.table[index].Unlock()
+		} else {
+			locks.table[index].RUnlock()
+		}
+	}
+}
