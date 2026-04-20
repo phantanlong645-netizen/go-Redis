@@ -1,33 +1,41 @@
 package set
 
+import "go-Redis/datastruct/dict"
+
 type Set struct {
-	dict map[string]struct{}
+	dict dict.Dict
 }
 
-func Make() *Set {
-	return &Set{
-		dict: make(map[string]struct{}),
+func Make(members ...string) *Set {
+	set := &Set{
+		dict: dict.MakeSimple(),
 	}
+	for _, member := range members {
+		set.Add(member)
+	}
+	return set
+}
+func MakeConcurrentSafe(members ...string) *Set {
+	set := &Set{
+		dict: dict.MakeConcurrent(1),
+	}
+	for _, member := range members {
+		set.Add(member)
+	}
+	return set
 }
 func (s *Set) Add(member string) int {
-	if _, exist := s.dict[member]; exist {
-		return 0
-	}
-	s.dict[member] = struct{}{}
-	return 1
+	return s.dict.Put(member, nil)
 }
 func (s *Set) Remove(member string) int {
-	if _, exist := s.dict[member]; !exist {
-		return 0
-	}
-	delete(s.dict, member)
-	return 1
+	_, result := s.dict.Remove(member)
+	return result
 }
 func (s *Set) Has(member string) bool {
-	_, exists := s.dict[member]
+	_, exists := s.dict.Get(member)
 	return exists
 }
 
 func (s *Set) Len() int {
-	return len(s.dict)
+	return s.dict.Len()
 }
