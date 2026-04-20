@@ -1,6 +1,7 @@
 package database
 
 import (
+	list2 "go-Redis/datastruct/list"
 	"go-Redis/redis/protocol"
 	"strconv"
 )
@@ -10,9 +11,9 @@ func execLPush(db *DB, cmdLine [][]byte) protocol.Reply {
 	db.IsExpired(key)
 	entity, ok := db.Data[key]
 	if !ok {
-		list := make([][]byte, 0, len(cmdLine)-1)
+		list := list2.NewQuickList()
 		for i := 1; i < len(cmdLine); i++ {
-			list = append([][]byte{cmdLine[i]}, list...)
+			list.Insert(0, cmdLine[i])
 		}
 		db.Data[key] = &DataEntity{
 			Type: "list",
@@ -20,21 +21,21 @@ func execLPush(db *DB, cmdLine [][]byte) protocol.Reply {
 		}
 		delete(db.TTL, key)
 		db.AddVersion(key)
-		return protocol.NewIntReply(int64(len(list)))
+		return protocol.NewIntReply(int64(list.Len()))
 	}
 	if entity.Type != "list" {
 		return protocol.NewErrReply("ERR wrong type")
 	}
-	list, ok := entity.Data.([][]byte)
+	list, ok := entity.Data.(list2.List)
 	if !ok {
 		return protocol.NewErrReply("ERR wrong type")
 	}
 	for i := 1; i < len(cmdLine); i++ {
-		list = append([][]byte{cmdLine[i]}, list...)
+		list.Insert(0, cmdLine[i])
 	}
 	entity.Data = list
 	db.AddVersion(key)
-	return protocol.NewIntReply(int64(len(list)))
+	return protocol.NewIntReply(int64(list.Len()))
 }
 func execLPop(db *DB, cmdLine [][]byte) protocol.Reply {
 	key := string(cmdLine[0])
@@ -48,16 +49,15 @@ func execLPop(db *DB, cmdLine [][]byte) protocol.Reply {
 	if entity.Type != "list" {
 		return protocol.NewErrReply("ERR wrong type")
 	}
-	list, ok := entity.Data.([][]byte)
+	list, ok := entity.Data.(list2.List)
 	if !ok {
 		return protocol.NewErrReply("ERR wrong type")
 	}
-	if len(list) == 0 {
+	if list.Len() == 0 {
 		return protocol.NewNullBulkReply()
 	}
-	value := list[0]
-	list = list[1:]
-	if len(list) == 0 {
+	value, _ := list.Remove(0).([]byte)
+	if list.Len() == 0 {
 		delete(db.Data, key)
 		delete(db.TTL, key)
 	} else {
@@ -78,7 +78,10 @@ func execLRange(db *DB, cmdLine [][]byte) protocol.Reply {
 	if entity.Type != "list" {
 		return protocol.NewErrReply("ERR wrong type")
 	}
-	list, ok := entity.Data.([][]byte)
+	list, ok := entity.Data.(list2.List)
+	if !ok {
+		return protocol.NewErrReply("ERR wrong type")
+	}
 	start, err := strconv.Atoi(string(cmdLine[1]))
 	if err != nil {
 		return protocol.NewErrReply("ERR invalid start index")
@@ -87,7 +90,7 @@ func execLRange(db *DB, cmdLine [][]byte) protocol.Reply {
 	if err != nil {
 		return protocol.NewErrReply("ERR invalid stop index")
 	}
-	length := len(list)
+	length := list.Len()
 	if length == 0 {
 		return protocol.NewMultiBulkReply([][]byte{})
 	}
@@ -108,7 +111,7 @@ func execLRange(db *DB, cmdLine [][]byte) protocol.Reply {
 	}
 	res := make([][]byte, 0, stop-start+1)
 	for i := start; i <= stop; i++ {
-		res = append(res, list[i])
+		res = append(res, list.Get(i).([]byte))
 	}
 	return protocol.NewMultiBulkReply(res)
 }
@@ -117,9 +120,9 @@ func execRPush(db *DB, cmdLine [][]byte) protocol.Reply {
 	db.IsExpired(key)
 	entity, ok := db.Data[key]
 	if !ok {
-		list := make([][]byte, 0, len(cmdLine)-1)
+		list := list2.NewQuickList()
 		for i := 1; i < len(cmdLine); i++ {
-			list = append(list, cmdLine[i])
+			list.Add(cmdLine[i])
 		}
 		db.Data[key] = &DataEntity{
 			Type: "list",
@@ -127,19 +130,19 @@ func execRPush(db *DB, cmdLine [][]byte) protocol.Reply {
 		}
 		delete(db.TTL, key)
 		db.AddVersion(key)
-		return protocol.NewIntReply(int64(len(list)))
+		return protocol.NewIntReply(int64(list.Len()))
 	}
 	if entity.Type != "list" {
 		return protocol.NewErrReply("ERR wrong type")
 	}
-	list, ok := entity.Data.([][]byte)
+	list, ok := entity.Data.(list2.List)
 	if !ok {
 		return protocol.NewErrReply("ERR wrong type")
 	}
 	for i := 1; i < len(cmdLine); i++ {
-		list = append(list, cmdLine[i])
+		list.Add(cmdLine[i])
 	}
 	entity.Data = list
 	db.AddVersion(key)
-	return protocol.NewIntReply(int64(len(list)))
+	return protocol.NewIntReply(int64(list.Len()))
 }

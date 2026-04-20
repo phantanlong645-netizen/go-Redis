@@ -39,3 +39,11 @@ func (s *Set) Has(member string) bool {
 func (s *Set) Len() int {
 	return s.dict.Len()
 }
+func (s *Set) Members() []string {
+	res := make([]string, 0, s.Len())
+	s.dict.ForEach(func(key string, val any) bool {
+		res = append(res, key)
+		return true
+	})
+	return res
+}

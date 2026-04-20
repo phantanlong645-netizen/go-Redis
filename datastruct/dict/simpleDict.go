@@ -52,3 +52,13 @@ func (d *SimpleDict) Remove(key string) (val any, result int) {
 func (d *SimpleDict) Len() int {
 	return len(d.m)
 }
+func (d *SimpleDict) ForEach(consumer Consumer) {
+	if consumer == nil {
+		return
+	}
+	for key, val := range d.m {
+		if !consumer(key, val) {
+			return
+		}
+	}
+}

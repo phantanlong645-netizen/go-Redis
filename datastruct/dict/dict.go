@@ -5,6 +5,8 @@ import (
 	"sync"
 )
 
+type Consumer func(key string, val any) bool
+
 type Dict interface {
 	Get(key string) (val any, exist bool)
 	Put(key string, val any) int
@@ -12,6 +14,7 @@ type Dict interface {
 	PutIfAbsent(key string, val any) int
 	PutIfExists(key string, val any) int
 	Len() int
+	ForEach(consumer Consumer)
 }
 type shard struct {
 	m     map[string]any
@@ -112,4 +115,24 @@ func (d *ConcurrentDict) PutIfExists(key string, val any) int {
 	}
 	s.m[key] = val
 	return 1
+}
+func (d *ConcurrentDict) ForEach(consumer Consumer) {
+	if consumer == nil {
+		return
+	}
+	for _, shard := range d.table {
+		shard.mutex.RLock()
+		stop := false
+		for key, v := range shard.m {
+			if !consumer(key, v) {
+				stop = true
+				break
+			}
+		}
+		shard.mutex.RUnlock()
+		if stop {
+			break
+		}
+	}
+
 }

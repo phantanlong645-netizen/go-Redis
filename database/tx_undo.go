@@ -1,6 +1,8 @@
 package database
 
 import (
+	list2 "go-Redis/datastruct/list"
+	set2 "go-Redis/datastruct/set"
 	"sort"
 	"strconv"
 	"time"
@@ -113,37 +115,36 @@ func undoForkey(db *DB, key string) [][][]byte {
 			append([]byte(nil), value...),
 		})
 	case "list":
-		list, _ := entity.Data.([][]byte)
-		cmd := make([][]byte, 0, len(list)+2)
+		list, _ := entity.Data.(list2.List)
+		cmd := make([][]byte, 0, list.Len()+2)
 		cmd = append(cmd, []byte("DEL"), []byte(key))
 		res = append(res, cmd)
 
-		if len(list) > 0 {
-			pushCmd := make([][]byte, 0, len(list)+1)
+		if list.Len() > 0 {
+			pushCmd := make([][]byte, 0, list.Len()+1)
 			pushCmd = append(pushCmd, []byte("RPUSH"), []byte(key))
-			for _, v := range list {
-				pushCmd = append(pushCmd, append([]byte(nil), v...))
+			values := list.Range(0, list.Len())
+			for _, v := range values {
+				pushCmd = append(pushCmd, append([]byte(nil), v.([]byte)...))
 			}
 			res = append(res, pushCmd)
 		}
 	case "set":
-		set, _ := entity.Data.(map[string]struct{})
-		members := make([]string, 0, len(set))
-		for k := range set {
-			members = append(members, k)
-		}
-		sort.Strings(members)
+		set, _ := entity.Data.(*set2.Set)
 		res = append(res, [][]byte{
 			[]byte("DEL"),
 			[]byte(key),
 		})
-		if len(members) > 0 {
+		if set != nil && set.Len() > 0 {
+			members := set.Members()
+			sort.Strings(members)
 			cmd := make([][]byte, 0, len(members)+2)
 			cmd = append(cmd, []byte("SADD"), []byte(key))
-			for _, v := range members {
-				cmd = append(cmd, []byte(v))
+			for _, member := range members {
+				cmd = append(cmd, []byte(member))
 			}
 			res = append(res, cmd)
+
 		}
 	case "hash":
 		hash, _ := entity.Data.(map[string][]byte)
