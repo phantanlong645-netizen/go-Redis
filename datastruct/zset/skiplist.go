@@ -144,3 +144,20 @@ func (s *SkipList) remove(member string, score float64) bool {
 	}
 	return false
 }
+func (s *SkipList) getByRank(rank int64) *node {
+	if rank <= 0 || rank > s.length {
+		return nil
+	}
+	var i int64 = 0
+	n := s.header
+	for level := s.level - 1; level >= 0; level-- {
+		for n.level[level].forward != nil && (i+n.level[level].span <= rank) {
+			i += n.level[level].span
+			n = n.level[level].forward
+		}
+		if i == rank {
+			return n
+		}
+	}
+	return nil
+}

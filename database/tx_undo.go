@@ -3,6 +3,7 @@ package database
 import (
 	list2 "go-Redis/datastruct/list"
 	set2 "go-Redis/datastruct/set"
+	zset2 "go-Redis/datastruct/zset"
 	"sort"
 	"strconv"
 	"time"
@@ -166,23 +167,24 @@ func undoForkey(db *DB, key string) [][][]byte {
 			})
 		}
 	case "zset":
-		zset, _ := entity.Data.(map[string]float64)
-		members := make([]string, 0, len(zset))
-		for member := range zset {
-			members = append(members, member)
-		}
-		sort.Strings(members)
+		zset, _ := entity.Data.(*zset2.SortedSet)
 		res = append(res, [][]byte{
 			[]byte("DEL"),
 			[]byte(key),
 		})
-		for _, member := range members {
-			res = append(res, [][]byte{
-				[]byte("ZADD"),
-				[]byte(key),
-				[]byte(strconv.FormatFloat(zset[member], 'f', -1, 64)),
-				[]byte(member),
-			})
+		if zset != nil && zset.Len() > 0 {
+			for rank := int64(1); rank <= zset.Len(); rank++ {
+				element, ok := zset.GetByRank(rank)
+				if !ok {
+					continue
+				}
+				res = append(res, [][]byte{
+					[]byte("ZADD"),
+					[]byte(key),
+					[]byte(strconv.FormatFloat(element.Score, 'f', -1, 64)),
+					[]byte(element.Member),
+				})
+			}
 		}
 	}
 	if !expireAt.IsZero() {
@@ -192,6 +194,7 @@ func undoForkey(db *DB, key string) [][][]byte {
 			[]byte(strconv.FormatInt(expireAt.UnixMilli(), 10)),
 		})
 	}
+
 	return res
 
 }

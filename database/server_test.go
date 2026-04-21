@@ -1,6 +1,7 @@
 package database
 
 import (
+	list2 "go-Redis/datastruct/list"
 	"strings"
 	"testing"
 	"time"
@@ -230,14 +231,13 @@ func TestLPush(t *testing.T) {
 		t.Fatalf("unexpected type: %s", entity.Type)
 	}
 
-	list, ok := entity.Data.([][]byte)
+	list, ok := entity.Data.(list2.List)
 	if !ok {
 		t.Fatal("expected list data type")
 	}
-
-	// LPUSH 先插 a，再左插 b，所以结果应该是 [b, a]。
-	if len(list) != 2 || string(list[0]) != "b" || string(list[1]) != "a" {
-		t.Fatalf("unexpected list contents: %#v", list)
+	vals := list.Range(0, list.Len())
+	if len(vals) != 2 || string(vals[0].([]byte)) != "b" || string(vals[1].([]byte)) != "a" {
+		t.Fatalf("unexpected list contents: %#v", vals)
 	}
 }
 func TestDBExec(t *testing.T) {
@@ -354,14 +354,13 @@ func TestRPush(t *testing.T) {
 		t.Fatalf("unexpected type: %s", entity.Type)
 	}
 
-	list, ok := entity.Data.([][]byte)
+	list, ok := entity.Data.(list2.List)
 	if !ok {
 		t.Fatal("expected list data type")
 	}
-
-	// RPUSH 先插 a，再右插 b，所以结果应该是 [a, b]。
-	if len(list) != 2 || string(list[0]) != "a" || string(list[1]) != "b" {
-		t.Fatalf("unexpected list contents: %#v", list)
+	vals := list.Range(0, list.Len())
+	if len(vals) != 2 || string(vals[0].([]byte)) != "a" || string(vals[1].([]byte)) != "b" {
+		t.Fatalf("unexpected list contents: %#v", vals)
 	}
 }
 func TestZSetCommands(t *testing.T) {
@@ -393,7 +392,6 @@ func TestZSetCommands(t *testing.T) {
 		t.Fatalf("unexpected zrange reply: %q", reply)
 	}
 
-	// 按 score 从小到大，所以 jack(90) 在前，tom(100) 在后。
 	if !strings.Contains(reply, "jack") || !strings.Contains(reply, "tom") {
 		t.Fatalf("unexpected zrange contents: %q", reply)
 	}
@@ -460,34 +458,29 @@ func TestSetCommands(t *testing.T) {
 func TestWrongTypeCommands(t *testing.T) {
 	db := NewDB()
 
-	// 先准备 4 种不同类型的 key。
 	db.Exec([][]byte{[]byte("SET"), []byte("str"), []byte("hello")})
 	db.Exec([][]byte{[]byte("HSET"), []byte("hash"), []byte("name"), []byte("tom")})
 	db.Exec([][]byte{[]byte("LPUSH"), []byte("list"), []byte("a")})
 	db.Exec([][]byte{[]byte("ZADD"), []byte("zset"), []byte("100"), []byte("jack")})
 
-	// string key 被 hash 命令操作，应该报错。
 	if got := string(db.Exec([][]byte{
 		[]byte("HGET"), []byte("str"), []byte("name"),
 	}).ToBytes()); got != "-ERR wrong type\r\n" {
 		t.Fatalf("unexpected hget on string reply: %q", got)
 	}
 
-	// hash key 被 string 命令操作，应该报错。
 	if got := string(db.Exec([][]byte{
 		[]byte("GET"), []byte("hash"),
 	}).ToBytes()); got != "-ERR wrong type\r\n" {
 		t.Fatalf("unexpected get on hash reply: %q", got)
 	}
 
-	// list key 被 zset 命令操作，应该报错。
 	if got := string(db.Exec([][]byte{
 		[]byte("ZADD"), []byte("list"), []byte("1"), []byte("x"),
 	}).ToBytes()); got != "-ERR wrong type\r\n" {
 		t.Fatalf("unexpected zadd on list reply: %q", got)
 	}
 
-	// zset key 被 list 命令操作，应该报错。
 	if got := string(db.Exec([][]byte{
 		[]byte("LPUSH"), []byte("zset"), []byte("x"),
 	}).ToBytes()); got != "-ERR wrong type\r\n" {

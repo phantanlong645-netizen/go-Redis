@@ -1,8 +1,8 @@
 package database
 
 import (
+	zset2 "go-Redis/datastruct/zset"
 	"go-Redis/redis/protocol"
-	"sort"
 	"strconv"
 )
 
@@ -15,36 +15,34 @@ func execZAdd(db *DB, cmdLine [][]byte) protocol.Reply {
 	}
 	member := string(cmdLine[2])
 	entity, ok := db.Data[key]
+	var zset *zset2.SortedSet
 	if !ok {
+		zset = zset2.Make()
 		db.Data[key] = &DataEntity{
 			Type: "zset",
-			Data: map[string]float64{
-				member: score,
-			},
+			Data: zset,
 		}
 		delete(db.TTL, key)
-		db.AddVersion(key)
-		return protocol.NewIntReply(1)
+	} else {
+		if entity.Type != "zset" {
+			return protocol.NewErrReply("ERR wrong type")
+		}
+		var typeOK bool
+		zset, typeOK = entity.Data.(*zset2.SortedSet)
+		if !typeOK {
+			return protocol.NewErrReply("ERR wrong type")
+		}
 	}
-	if entity.Type != "zset" {
-		return protocol.NewErrReply("ERR wrong type")
-	}
-	set, ok := entity.Data.(map[string]float64)
-	if !ok {
-		return protocol.NewErrReply("ERR wrong type")
-	}
-	oldscore, exist := set[member]
-	if exist && oldscore == score {
+	if old, exists := zset.Get(member); exists && old.Score == score {
 		return protocol.NewIntReply(0)
 	}
 
-	set[member] = score
+	added := zset.Add(member, score)
 	db.AddVersion(key)
-	if exist {
-		return protocol.NewIntReply(0)
-	} else {
+	if added {
 		return protocol.NewIntReply(1)
 	}
+	return protocol.NewIntReply(0)
 }
 func execZRange(db *DB, cmdLine [][]byte) protocol.Reply {
 	key := string(cmdLine[0])
@@ -62,7 +60,7 @@ func execZRange(db *DB, cmdLine [][]byte) protocol.Reply {
 		return protocol.NewErrReply("ERR wrong type")
 	}
 
-	zset, ok := entity.Data.(map[string]float64)
+	zset, ok := entity.Data.(*zset2.SortedSet)
 	if !ok {
 		return protocol.NewErrReply("ERR wrong type")
 	}
@@ -71,53 +69,40 @@ func execZRange(db *DB, cmdLine [][]byte) protocol.Reply {
 	if err != nil {
 		return protocol.NewErrReply("ERR invalid start index")
 	}
-
 	stop, err := strconv.Atoi(string(cmdLine[2]))
 	if err != nil {
 		return protocol.NewErrReply("ERR invalid stop index")
 	}
-	entries := make([]zsetEntry, 0, len(zset))
-	for member, score := range zset {
-		entries = append(entries, zsetEntry{
-			member: member,
-			score:  score,
-		})
-	}
-	sort.Slice(entries, func(i, j int) bool {
-		if entries[i].score == entries[j].score {
-			return entries[i].member < entries[j].member
-		}
-		return entries[i].score < entries[j].score
-	})
-	length := len(entries)
+
+	length := int(zset.Len())
 	if length == 0 {
 		return protocol.NewMultiBulkReply([][]byte{})
 	}
 
-	// 处理负索引，例如 -1 表示最后一个元素。
 	if start < 0 {
 		start = length + start
 	}
 	if stop < 0 {
 		stop = length + stop
 	}
-
 	if start < 0 {
 		start = 0
 	}
 	if stop >= length {
 		stop = length - 1
 	}
-
 	if start >= length || start > stop {
 		return protocol.NewMultiBulkReply([][]byte{})
 	}
 
 	result := make([][]byte, 0, stop-start+1)
 	for i := start; i <= stop; i++ {
-		result = append(result, []byte(entries[i].member))
+		element, exists := zset.GetByRank(int64(i + 1)) // 1-based rank
+		if !exists {
+			break
+		}
+		result = append(result, []byte(element.Member))
 	}
-
 	return protocol.NewMultiBulkReply(result)
 }
 
@@ -143,15 +128,15 @@ func execZScore(db *DB, cmdLine [][]byte) protocol.Reply {
 		return protocol.NewErrReply("ERR wrong type")
 	}
 
-	zset, ok := entity.Data.(map[string]float64)
+	zset, ok := entity.Data.(*zset2.SortedSet)
 	if !ok {
 		return protocol.NewErrReply("ERR wrong type")
 	}
 
-	score, ok := zset[member]
+	element, ok := zset.Get(member)
 	if !ok {
 		return protocol.NewNullBulkReply()
 	}
 
-	return protocol.NewBulkReply([]byte(strconv.FormatFloat(score, 'f', -1, 64)))
+	return protocol.NewBulkReply([]byte(strconv.FormatFloat(element.Score, 'f', -1, 64)))
 }

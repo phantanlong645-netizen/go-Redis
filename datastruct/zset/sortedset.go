@@ -53,3 +53,10 @@ func (s *SortedSet) Remove(member string) bool {
 	delete(s.dict, member)
 	return true
 }
+func (s *SortedSet) GetByRank(rank int64) (*Element, bool) {
+	n := s.skiplist.getByRank(rank)
+	if n == nil {
+		return nil, false
+	}
+	return n.Element, true
+}
